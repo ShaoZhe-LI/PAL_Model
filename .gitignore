@@ -1,0 +1,16 @@
+# 录音文件
+*.wav
+
+# matlab自动保存的文件
+*.asv
+
+# 禁止加入所有的png图片
+*.png 
+*.jpg
+*.bmp
+*.pdf
+*.docx
+# !broadband/fig/*.pdf
+
+# 允许加入特定的png图片
+!fig/
