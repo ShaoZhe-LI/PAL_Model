@@ -23,6 +23,7 @@ source.v0 = 0.172;
 source.v_ratio = 1;
 source.m = 5;
 source.F = 0.2;
+% source.poly_n = 0;
 
 source.f1 = 42e3;
 source.fa = 2e3;
@@ -31,37 +32,36 @@ source.fa = 2e3;
 calc = struct();
 
 % --- FHT / King ---
-calc.fht.N_FHT = 32768 * 2;
+calc.fht.N_FHT = 32768 * 1;
 calc.fht.rho_max = 1.2;
 calc.fht.Nh_scale = 1.2;
 calc.fht.NH_scale = 4;
 calc.fht.Nh_v_scale = 1.1;
-calc.fht.zu_max = 1.2;
+calc.fht.zu_max = 1.1;
 calc.fht.za_max = 1;
 
 % --- DIM source discretization ---
 calc.dim.use_freq = 'f2';
-calc.dim.dis_coe = 16;
+calc.dim.dis_coe = 16 * 1;
 calc.dim.margin = 1;
-
 calc.dim.src_discretization = 'polar';   % 'cart' (default) | 'polar'
 
 
 % --- King analytic spectrum stability ---
 calc.king.gspec_method = 'analytic'; % 'analytic' or 'transform'
-
 calc.king.eps_kzz = 1e-3; % keep your naming
 % map to function-expected fields:
 calc.king.eps_phase = calc.king.eps_kzz;
 calc.king.kz_min = 1e-12;
+calc.king.band_refine.enable = true;
 
 % --- ASM settings (used only if calc.dim.method = 'asm') ---
 calc.asm.pad_factor = 16;
 calc.asm.kzz_eps = 1e-12;
 
 %% -------------------- target plane --------------------
-z_target = 1.0;
-ds = 16;
+z_target = 1;
+ds = 16 * 2;
 
 %% ==================== PROFILER: helpers ====================
 get_mem_mb = @() local_get_mem_mb(); % returns NaN if not available

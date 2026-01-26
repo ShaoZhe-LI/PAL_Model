@@ -79,6 +79,29 @@ end
 if ~isfield(calc.king,'kz_min') || isempty(calc.king.kz_min)
     calc.king.kz_min = 1e-12;
 end
+% -------------------- King critical-band refinement defaults --------------------
+if ~isfield(calc.king,'band_refine') || isempty(calc.king.band_refine)
+    calc.king.band_refine = struct();
+end
+% Enable by default? —— 建议 false，显式打开更安全
+if ~isfield(calc.king.band_refine,'enable') || isempty(calc.king.band_refine.enable)
+    calc.king.band_refine.enable = false;
+end
+% Fine grid density multiplier (N_FHT_fine = N_mult * N_FHT_coarse)
+% 2 is usually enough to stabilize m<=10 near-axis behavior
+if ~isfield(calc.king.band_refine,'N_mult') || isempty(calc.king.band_refine.N_mult)
+    calc.king.band_refine.N_mult = 2;
+end
+% Critical-band half width: Δk ≈ factor * |Im(k)|
+% This matches the evanescent-to-propagating transition thickness
+if ~isfield(calc.king.band_refine,'delta_k_factor') || isempty(calc.king.band_refine.delta_k_factor)
+    calc.king.band_refine.delta_k_factor = 8;
+end
+% Smooth transition width (avoid sharp spectral truncation)
+% taper ≈ 2*Δk is conservative and numerically stable
+if ~isfield(calc.king.band_refine,'taper_k_factor') || isempty(calc.king.band_refine.taper_k_factor)
+    calc.king.band_refine.taper_k_factor = 2;
+end
 
 % ---- DIM parallel defaults ----
 if ~isfield(calc,'dim') || isempty(calc.dim); calc.dim = struct(); end
@@ -148,15 +171,145 @@ if do_king
                 'calc.king.gspec_method must be ''analytic'' or ''transform''.');
     end
 
-    F1   = G1 .* Vs1;
-    phi1 = -4*pi * m_FHT(F1, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
-        fht.a_solve, fht.x0, fht.x1, fht.k0, source.m_used);
-    p1 = 1j * source.medium.rho0 * source.medium.c0 * real(source.k1) .* phi1;
+    % ===================== COARSE: full spectrum =====================
+    F1_c = G1 .* Vs1;   % Nr_c x Nz
+    F2_c = G2 .* Vs2;
 
-    F2   = G2 .* Vs2;
-    phi2 = -4*pi * m_FHT(F2, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
+    phi1_c = -4*pi * m_FHT(F1_c, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
         fht.a_solve, fht.x0, fht.x1, fht.k0, source.m_used);
+
+    phi2_c = -4*pi * m_FHT(F2_c, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
+        fht.a_solve, fht.x0, fht.x1, fht.k0, source.m_used);
+
+    % 默认：不做校正
+    phi1 = phi1_c;
+    phi2 = phi2_c;
+
+    % ===================== CRITICAL-BAND REFINEMENT =====================
+    if isfield(calc,'king') && isfield(calc.king,'band_refine') ...
+            && calc.king.band_refine.enable
+
+        % ---------- parameters ----------
+        kr_c = kr(:);                % coarse k_rho grid (== fht.xH)
+        zrow = reshape(z_k, 1, []);
+
+        k1r = real(source.k1);  a1 = abs(imag(source.k1));
+        k2r = real(source.k2);  a2 = abs(imag(source.k2));
+
+        dk1 = max(calc.king.band_refine.delta_k_factor * a1, 1e-12);
+        dk2 = max(calc.king.band_refine.delta_k_factor * a2, 1e-12);
+        tw1 = calc.king.band_refine.taper_k_factor * dk1;
+        tw2 = calc.king.band_refine.taper_k_factor * dk2;
+
+        % ---------- coarse band window ----------
+        W1_c = local_band_window(kr_c, k1r, dk1, tw1);  % Nr_c x 1
+        W2_c = local_band_window(kr_c, k2r, dk2, tw2);
+
+        % ---------- COARSE band contribution ----------
+        F1_cb = (W1_c * ones(1,Nz)) .* F1_c;
+        F2_cb = (W2_c * ones(1,Nz)) .* F2_c;
+
+        phi1_cb = -4*pi * m_FHT(F1_cb, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
+            fht.a_solve, fht.x0, fht.x1, fht.k0, source.m_used);
+
+        phi2_cb = -4*pi * m_FHT(F2_cb, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
+            fht.a_solve, fht.x0, fht.x1, fht.k0, source.m_used);
+
+        % ---------- FINE grid: rebuild FHT parameters ----------
+        calc_f = calc;
+        calc_f.fht.N_FHT = calc.fht.N_FHT * calc.king.band_refine.N_mult;
+
+        [source_f, fht_f] = make_source_velocity(source, medium, calc_f);
+
+        kr_f = fht_f.xH(:);        % fine k_rho grid
+
+        % IMPORTANT: fix rho-scale to COARSE Nh
+        Nh_rho = fht.Nh;
+        rho_c  = fht.xh(:);        % coarse rho
+        rho_f  = fht_f.x1(:) * Nh_rho;  % fine rho (same physical scale)
+
+        % ---------- fine Vs ----------
+        Vs1_f = m_FHT(source_f.fht.vs1_on_xh_v, ...
+            fht_f.N_FHT, 1, fht_f.Nh_v, fht_f.NH_v, ...
+            fht_f.a_solve, fht_f.x0, fht_f.x1, fht_f.k0, source_f.m_used);
+
+        Vs2_f = m_FHT(source_f.fht.vs2_on_xh_v, ...
+            fht_f.N_FHT, 1, fht_f.Nh_v, fht_f.NH_v, ...
+            fht_f.a_solve, fht_f.x0, fht_f.x1, fht_f.k0, source_f.m_used);
+
+        % ---------- fine Green spectrum ----------
+        switch king_gspec_method
+            case "analytic"
+                G1_f = local_green_spec_analytic(source.k1, kr_f, zrow, ...
+                    calc.king.eps_phase, calc.king.kz_min);
+                G2_f = local_green_spec_analytic(source.k2, kr_f, zrow, ...
+                    calc.king.eps_phase, calc.king.kz_min);
+
+            case "transform"
+                % fine rho grid for Green transform
+                rho_k_f = fht_f.xh(:);                 % Nr_f x 1
+                Nr_f = numel(rho_k_f);
+
+                G1_f = complex(zeros(Nr_f, Nz));
+                G2_f = complex(zeros(Nr_f, Nz));
+
+                for iz = 1:Nz
+                    z0 = z_k(iz);
+                    r  = hypot(rho_k_f, z0);
+                    r(r < 1e-9) = 1e-9;
+
+                    g1 = exp(1j * source.k1 .* r) ./ (4*pi*r);
+                    g2 = exp(1j * source.k2 .* r) ./ (4*pi*r);
+
+                    % NOTE: Green is axisymmetric -> miu = 0
+                    G1_f(:,iz) = m_FHT(g1, fht_f.N_FHT, 1, fht_f.Nh, fht_f.NH, ...
+                        fht_f.a_solve, fht_f.x0, fht_f.x1, fht_f.k0, 0);
+
+                    G2_f(:,iz) = m_FHT(g2, fht_f.N_FHT, 1, fht_f.Nh, fht_f.NH, ...
+                        fht_f.a_solve, fht_f.x0, fht_f.x1, fht_f.k0, 0);
+                end
+
+            otherwise
+                error('calc_ultrasound_field:BadKingGspecMethod', ...
+                    'calc.king.gspec_method must be ''analytic'' or ''transform''.');
+        end
+
+
+        F1_f = G1_f .* Vs1_f;
+        F2_f = G2_f .* Vs2_f;
+
+        % ---------- fine band window ----------
+        W1_f = local_band_window(kr_f, k1r, dk1, tw1);
+        W2_f = local_band_window(kr_f, k2r, dk2, tw2);
+
+        F1_fb = (W1_f * ones(1,Nz)) .* F1_f;
+        F2_fb = (W2_f * ones(1,Nz)) .* F2_f;
+
+        % ---------- fine band contribution (rho-scale FIXED) ----------
+        phi1_fb = -4*pi * m_FHT(F1_fb, fht_f.N_FHT, Nz, fht_f.NH, Nh_rho, ...
+            fht_f.a_solve, fht_f.x0, fht_f.x1, fht_f.k0, source_f.m_used);
+
+        phi2_fb = -4*pi * m_FHT(F2_fb, fht_f.N_FHT, Nz, fht_f.NH, Nh_rho, ...
+            fht_f.a_solve, fht_f.x0, fht_f.x1, fht_f.k0, source_f.m_used);
+
+        % ---------- interpolate fine band -> coarse rho ----------
+        phi1_fb_on_c = complex(zeros(size(phi1_c)));
+        phi2_fb_on_c = complex(zeros(size(phi2_c)));
+
+        for iz = 1:Nz
+            phi1_fb_on_c(:,iz) = interp1(rho_f, phi1_fb(:,iz), rho_c, 'linear', 0);
+            phi2_fb_on_c(:,iz) = interp1(rho_f, phi2_fb(:,iz), rho_c, 'linear', 0);
+        end
+
+        % ---------- combine ----------
+        phi1 = phi1_c - phi1_cb + phi1_fb_on_c;
+        phi2 = phi2_c - phi2_cb + phi2_fb_on_c;
+    end
+
+    % ===================== pressures (COARSE grid, unchanged output) =====================
+    p1 = 1j * source.medium.rho0 * source.medium.c0 * real(source.k1) .* phi1;
     p2 = 1j * source.medium.rho0 * source.medium.c0 * real(source.k2) .* phi2;
+
 
     result.king = struct();
     result.king.method            = "King-FHT";
@@ -529,4 +682,21 @@ for iz = 1:Nz
     H = exp(1j*kz*z) ./ (kz + kzz_eps);
     P(:,:,iz) = ifft2( coef * (Vhat .* H) );
 end
+end
+
+function W = local_band_window(kr, k0, dk, tw)
+% Local band window in k_rho domain
+% W = 1                      for |kr-k0| <= dk
+% W = cosine taper from 1->0 for dk < |kr-k0| < dk+tw
+% W = 0                      otherwise
+
+d = abs(kr - k0);
+W = zeros(size(kr));
+
+id1 = d <= dk;
+W(id1) = 1;
+
+id2 = (d > dk) & (d < dk + tw);
+xi = (d(id2) - dk) / tw;   % normalized 0..1
+W(id2) = 0.5 * (1 + cos(pi * xi));  % smooth 1 -> 0
 end
