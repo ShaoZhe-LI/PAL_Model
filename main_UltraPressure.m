@@ -8,6 +8,11 @@
 
 clear; clc; close all;
 
+
+%% -------------------- save figures (GLOBAL control) --------------------
+global SAVE_PNG SAVE_DIR
+SAVE_PNG = false;   % <<< 全局开关：true 保存；false 不保存
+
 %% -------------------- medium --------------------
 medium.c0 = 343;
 medium.rho0 = 1.21;
@@ -21,7 +26,7 @@ source.profile = 'Vortex-m'; % 'Uniform' | 'Focus' | 'Vortex-m' | 'Poly' | 'Cust
 source.a = 0.1;
 source.v0 = 0.172;
 source.v_ratio = 1;
-source.m = 5;
+source.m = 10;
 source.F = 0.2;
 % source.poly_n = 0;
 
@@ -48,16 +53,36 @@ calc.dim.src_discretization = 'polar';   % 'cart' (default) | 'polar'
 
 
 % --- King analytic spectrum stability ---
-calc.king.gspec_method = 'analytic'; % 'analytic' or 'transform'
+calc.king.gspec_method = 'analytic'; % 'analytic' or 'transform'，优选前者
 calc.king.eps_kzz = 1e-3; % keep your naming
 % map to function-expected fields:
 calc.king.eps_phase = calc.king.eps_kzz;
 calc.king.kz_min = 1e-12;
+
 calc.king.band_refine.enable = true;
+% 本行决定是否局部加细以改善近轴结果
+% 计算发现，局部加细比等倍率的全局加细更加耗时，且效果不如后者，后续应改善
+% 相应的，局部加细占用内存会少于全局加细
 
 % --- ASM settings (used only if calc.dim.method = 'asm') ---
 calc.asm.pad_factor = 16;
 calc.asm.kzz_eps = 1e-12;
+
+%% -------------------- save setup --------------------
+if SAVE_PNG
+    tstr = datestr(datetime('now'), 'mmdd_HHMM');
+    a_str = sprintf('%.2fm', source.a);
+    m_str = sprintf('m=%d', source.m);
+    SAVE_DIR = sprintf('%s_%s__%s', a_str, m_str, tstr);
+
+    if ~exist(SAVE_DIR, 'dir')
+        mkdir(SAVE_DIR);
+    end
+
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc);  % <<< 新增
+else
+    SAVE_DIR = '';
+end
 
 %% -------------------- target plane --------------------
 z_target = 1;
@@ -148,7 +173,7 @@ plot(rho_ds, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
 plot(rho_ds, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
 grid on;
 xlabel('\rho (m)'); ylabel('SPL (dB)');
-title(sprintf('Magnitude @ z = %.6f m', z_use));
+title(sprintf('Magnitude @ z = %.2f m', z_use));
 legend('King','DIM');
 
 subplot(4,1,2);
@@ -156,7 +181,7 @@ plot(rho_ds, magK, 'LineWidth',1.5); hold on;
 plot(rho_ds, magD, '--', 'LineWidth',1.5);
 grid on;
 xlabel('\rho (m)'); ylabel('|p| (Pa)');
-title(sprintf('Magnitude @ z = %.6f m', z_use));
+title(sprintf('Magnitude @ z = %.2f m', z_use));
 legend('King','DIM');
 
 subplot(4,1,3);
@@ -174,9 +199,11 @@ xlabel('\rho (m)');
 ylabel('log_{10} relative error');
 title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
 
+local_save_fig_png(gcf, sprintf('King_vs_DIM_1D_z%.2fm', z_use));
+
 fprintf('\n==================== SUMMARY ====================\n');
 fprintf('dim_method = %s\n', string(res.calc.dim.method));
-fprintf('z_target = %.3f m, z_use = %.6f m (nearest FHT grid)\n', z_target, z_use);
+fprintf('z_target = %.1f m, z_use = %.2f m (nearest FHT grid)\n', z_target, z_use);
 fprintf('Total (both) time: %.3f s\n', tAll);
 fprintf('NOTE: memory readings may be NaN if OS API is unavailable.\n');
 
@@ -222,6 +249,8 @@ pbaspect([z_ultra(end), 2*rho_max, 1]);
 set(gca,'linewidth',2);
 set(gca,'TickLabelInterpreter','latex');
 
+local_save_fig_png(gcf, 'FHT_xOz_AMP');
+
 % ---- SPL map ----
 figure('Name','FHT: xOz SPL');
 pcolor(z_ultra, x_axis, SPL_xz);
@@ -239,6 +268,8 @@ ylabel('$x$ (m)', 'Interpreter','latex','Fontsize',21);
 pbaspect([z_ultra(end), 2*rho_max, 1]);
 set(gca,'linewidth',2);
 set(gca,'TickLabelInterpreter','latex');
+
+local_save_fig_png(gcf, 'FHT_xOz_SPL');
 
 %% ============================================================
 % 2D FIG #2: xOy @ z≈1 m (FHT vs DIM) — SAME colorbar per figure
@@ -293,7 +324,7 @@ amp_lim = [min([AMP_K(:); AMP_D(:)]), max([AMP_K(:); AMP_D(:)])];
 ph_lim  = [-1 1];
 
 %% ---- FIG: xOy SPL (two subplots, SAME colorbar range) ----
-figure('Name',sprintf('xOy SPL @ z=%.6f m, m=%d (FHT vs DIM)', z_use, m_use), ...
+figure('Name',sprintf('xOy SPL @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
     'position',[100 100 1400 650]);
 
 subplot(1,2,1);
@@ -332,11 +363,13 @@ xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
 ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
 title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
 
-sgtitle(sprintf('$xOy$ SPL @ $z=%.6f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
+sgtitle(sprintf('$xOy$ SPL @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
     'Interpreter','latex','Fontsize',20);
 
+local_save_fig_png(gcf, sprintf('xOy_SPL_z%.2fm_m%d', z_use, m_use));
+
 %% ---- FIG: xOy AMP (|p|) (two subplots, SAME colorbar range) ----
-figure('Name',sprintf('xOy AMP @ z=%.6f m, m=%d (FHT vs DIM)', z_use, m_use), ...
+figure('Name',sprintf('xOy AMP @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
     'position',[100 100 1400 650]);
 
 subplot(1,2,1);
@@ -375,11 +408,13 @@ xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
 ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
 title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
 
-sgtitle(sprintf('$xOy$ AMP ($|p|$) @ $z=%.6f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
+sgtitle(sprintf('$xOy$ AMP ($|p|$) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
     'Interpreter','latex','Fontsize',20);
 
+local_save_fig_png(gcf, sprintf('xOy_AMP_z%.2fm_m%d', z_use, m_use));
+
 %% ---- FIG: xOy Phase/pi (two subplots, SAME colorbar range) ----
-figure('Name',sprintf('xOy Phase/pi @ z=%.6f m, m=%d (FHT vs DIM)', z_use, m_use), ...
+figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
     'position',[100 100 1400 650]);
 
 subplot(1,2,1);
@@ -418,10 +453,10 @@ xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
 ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
 title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
 
-sgtitle(sprintf('$xOy$ Phase$/\\pi$ @ $z=%.6f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
+sgtitle(sprintf('$xOy$ Phase$/\\pi$ @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
     'Interpreter','latex','Fontsize',20);
 
-
+local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d', z_use, m_use));
 
 
 %%
@@ -439,6 +474,94 @@ yyaxis right
 plot(xH(r_idx), abs(Vs1(r_idx)));
 hold off
 legend('ana', 'V');
+
+local_save_fig_png(gcf, 'Radial_G&V');
+
+%% ===================== EXTRA FIG (normalized + mark <1e-3) =====================
+% - Same layout as the first figure (4 subplots)
+% - Subplot(2): normalized magnitude (each by its own max)
+% - Mark regions where |p|/max < 1e-3
+%   * Mark on subplot(2), (3), and (4)
+% - Legend includes explicit label for marked region
+% - Save with suffix "__norm"
+
+% ---------- normalization ----------
+magK = abs(pK);
+magD = abs(pD);
+
+magK_n = magK ./ max(magK + eps0);
+magD_n = magD ./ max(magD + eps0);
+
+thr = 1e-3;
+
+% ---------- union mask (King OR DIM below threshold) ----------
+maskU = (magK_n < thr) | (magD_n < thr);
+segU  = local_mask_to_segments(rho_ds, maskU);
+
+% ---------- plot ----------
+fig2 = figure('Name',sprintf('King vs DIM-%s (z≈1 m) [NORM]', ...
+    upper(string(res.calc.dim.method))), ...
+    'position',[150 120 1200 1200]);
+
+% ==================== (1) SPL ====================
+subplot(4,1,1);
+plot(rho_ds, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
+plot(rho_ds, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
+grid on;
+xlabel('\rho (m)'); ylabel('SPL (dB)');
+title(sprintf('Magnitude @ z = %.2f m', z_use));
+legend('King','DIM','Location','best');
+
+% ==================== (2) normalized magnitude ====================
+subplot(4,1,2);
+plot(rho_ds, magK_n, 'LineWidth',1.5); hold on;
+plot(rho_ds, magD_n, '--', 'LineWidth',1.5);
+grid on;
+xlabel('\rho (m)'); ylabel('|p| / max(|p|)');
+title(sprintf('Normalized magnitude (thr = %.0e)', thr));
+
+yl = ylim;
+hPatch = local_mark_segments_strong(segU, yl);  % <--- mark
+ylim(yl);
+
+legend([ ...
+    findobj(gca,'Type','Line','-and','LineStyle','-'), ...
+    findobj(gca,'Type','Line','-and','LineStyle','--'), ...
+    hPatch(1)], ...
+    {'King','DIM','|p|/max < 1e-3'}, ...
+    'Location','best');
+
+% ==================== (3) phase ====================
+subplot(4,1,3);
+plot(rho_ds, unwrap(angle(pK)), 'LineWidth',1.5); hold on;
+plot(rho_ds, unwrap(angle(pD)), '--', 'LineWidth',1.5);
+grid on;
+xlabel('\rho (m)'); ylabel('Phase (rad)');
+title('Phase (unwrap)');
+
+yl = ylim;
+local_mark_segments_strong(segU, yl);
+ylim(yl);
+
+legend('King','DIM','Location','best');
+
+% ==================== (4) relative error ====================
+subplot(4,1,4);
+rel_err_log = log10( abs(pD - pK) ./ (abs(pK) + eps0) );
+plot(rho_ds, rel_err_log, 'LineWidth',1.5);
+grid on;
+xlabel('\rho (m)');
+ylabel('log_{10} relative error');
+title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
+
+yl = ylim;
+local_mark_segments_strong(segU, yl);
+ylim(yl);
+
+legend('Error','|p|/max < 1e-3','Location','best');
+
+% ---------- save with suffix ----------
+local_save_fig_png(fig2, sprintf('King_vs_DIM_1D_z%.2fm__norm', z_use));
 
 
 
@@ -483,5 +606,208 @@ if isnan(x)
     s = 'NaN';
 else
     s = sprintf('%.1f MB', x);
+end
+end
+
+function local_save_fig_png(fig_handle, base_name)
+% Save current figure as PNG into SAVE_DIR when SAVE_PNG is true.
+global SAVE_PNG SAVE_DIR
+if isempty(SAVE_PNG) || ~SAVE_PNG
+    return;
+end
+if isempty(SAVE_DIR) || ~exist(SAVE_DIR,'dir')
+    return;
+end
+
+% sanitize filename (avoid illegal chars)
+fname = local_sanitize_filename(base_name);
+fp = fullfile(SAVE_DIR, [fname, '.png']);
+
+% ensure white background (optional)
+set(fig_handle, 'Color', 'w');
+
+% export (prefer exportgraphics if available)
+try
+    exportgraphics(fig_handle, fp, 'Resolution', 300);
+catch
+    print(fig_handle, fp, '-dpng', '-r300');
+end
+end
+
+function s = local_sanitize_filename(s)
+s = char(string(s));
+s = strrep(s, ' ', '_');
+bad = '<>:"/\|?*';
+for k = 1:numel(bad)
+    s = strrep(s, bad(k), '_');
+end
+end
+
+function local_write_runinfo_txt(save_dir, medium, source, calc)
+% Write run configuration into a text file under save_dir.
+% Primary section: explicitly listed user parameters (fixed order)
+% Secondary section: auto-dump of remaining fields
+
+fp = fullfile(save_dir, 'run_info.txt');
+fid = fopen(fp, 'w');
+if fid < 0
+    warning('Cannot create run_info.txt in %s', save_dir);
+    return;
+end
+cleanupObj = onCleanup(@() fclose(fid));
+
+written = struct();   % record written fields to avoid duplication
+
+fprintf(fid, '===== RUN INFO =====\n');
+fprintf(fid, 'Time: %s\n\n', datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS'));
+
+%% =========================================================
+fprintf(fid, '===== PRIMARY PARAMETERS (USER SPECIFIED) =====\n\n');
+
+% -------------------- medium --------------------
+fprintf(fid, '%% -------------------- medium --------------------\n');
+fprintf(fid, 'medium.c0 = %.15g;\n', medium.c0);           written.medium.c0 = true;
+fprintf(fid, 'medium.rho0 = %.15g;\n', medium.rho0);       written.medium.rho0 = true;
+fprintf(fid, 'medium.beta = %.15g;\n', medium.beta);       written.medium.beta = true;
+fprintf(fid, 'medium.pref = %.15g;\n', medium.pref);       written.medium.pref = true;
+fprintf(fid, 'medium.use_absorp = %s;\n', local_bool_str(medium.use_absorp));
+written.medium.use_absorp = true;
+
+if isfield(medium,'atten_handle')
+    fprintf(fid, 'medium.atten_handle = @(f) AbsorpAttenCoef(f);\n');
+    written.medium.atten_handle = true;
+end
+fprintf(fid, '\n');
+
+% -------------------- source --------------------
+fprintf(fid, '%% -------------------- source --------------------\n');
+fprintf(fid, 'source.profile = ''%s'';\n', char(string(source.profile)));
+written.source.profile = true;
+
+fprintf(fid, 'source.a = %.15g;\n', source.a);             written.source.a = true;
+fprintf(fid, 'source.v0 = %.15g;\n', source.v0);           written.source.v0 = true;
+fprintf(fid, 'source.v_ratio = %.15g;\n', source.v_ratio); written.source.v_ratio = true;
+fprintf(fid, 'source.m = %d;\n', source.m);                written.source.m = true;
+fprintf(fid, 'source.F = %.15g;\n', source.F);             written.source.F = true;
+
+fprintf(fid, 'source.f1 = %.15g;\n', source.f1);           written.source.f1 = true;
+fprintf(fid, 'source.fa = %.15g;\n', source.fa);           written.source.fa = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.fht --------------------
+fprintf(fid, '%% -------------------- calc.fht --------------------\n');
+cf = calc.fht;
+fprintf(fid, 'calc.fht.N_FHT = %.15g;\n', cf.N_FHT);        written.calc.fht.N_FHT = true;
+fprintf(fid, 'calc.fht.rho_max = %.15g;\n', cf.rho_max);    written.calc.fht.rho_max = true;
+fprintf(fid, 'calc.fht.Nh_scale = %.15g;\n', cf.Nh_scale);  written.calc.fht.Nh_scale = true;
+fprintf(fid, 'calc.fht.NH_scale = %.15g;\n', cf.NH_scale);  written.calc.fht.NH_scale = true;
+fprintf(fid, 'calc.fht.Nh_v_scale = %.15g;\n', cf.Nh_v_scale);
+written.calc.fht.Nh_v_scale = true;
+fprintf(fid, 'calc.fht.zu_max = %.15g;\n', cf.zu_max);      written.calc.fht.zu_max = true;
+fprintf(fid, 'calc.fht.za_max = %.15g;\n', cf.za_max);      written.calc.fht.za_max = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.dim --------------------
+fprintf(fid, '%% -------------------- calc.dim --------------------\n');
+fprintf(fid, 'calc.dim.dis_coe = %.15g;\n', calc.dim.dis_coe);
+written.calc.dim.dis_coe = true;
+
+fprintf(fid, 'calc.dim.src_discretization = ''%s'';\n', ...
+    char(string(calc.dim.src_discretization)));
+written.calc.dim.src_discretization = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.king --------------------
+fprintf(fid, '%% -------------------- calc.king --------------------\n');
+fprintf(fid, 'calc.king.gspec_method = ''%s'';\n', ...
+    char(string(calc.king.gspec_method)));
+written.calc.king.gspec_method = true;
+
+fprintf(fid, 'calc.king.band_refine.enable = %s;\n', ...
+    local_bool_str(calc.king.band_refine.enable));
+written.calc.king.band_refine.enable = true;
+
+fprintf(fid, '\n');
+
+%% =========================================================
+fprintf(fid, '===== SECONDARY PARAMETERS (AUTO DUMP) =====\n\n');
+
+local_dump_struct(fid, medium, 'medium', written);
+local_dump_struct(fid, source, 'source', written);
+local_dump_struct(fid, calc,   'calc',   written);
+
+fprintf(fid, '\n===== END =====\n');
+end
+
+function local_dump_struct(fid, S, prefix, written)
+fn = fieldnames(S);
+for i = 1:numel(fn)
+    f = fn{i};
+
+    % skip already written fields
+    if isfield(written, prefix) && isfield(written.(prefix), f)
+        continue;
+    end
+
+    v = S.(f);
+    name = sprintf('%s.%s', prefix, f);
+
+    if isnumeric(v) && isscalar(v)
+        fprintf(fid, '%s = %.15g;\n', name, v);
+    elseif islogical(v) && isscalar(v)
+        fprintf(fid, '%s = %s;\n', name, local_bool_str(v));
+    elseif ischar(v) || isstring(v)
+        fprintf(fid, '%s = ''%s'';\n', name, char(string(v)));
+    elseif isstruct(v)
+        local_dump_struct(fid, v, name, struct());
+    elseif isa(v,'function_handle')
+        fprintf(fid, '%s = %s;\n', name, func2str(v));
+    end
+end
+end
+
+function s = local_bool_str(x)
+if logical(x)
+    s = 'true';
+else
+    s = 'false';
+end
+end
+
+function seg = local_mask_to_segments(x, mask)
+% seg: Kx2 array, each row [xL xR] for contiguous true regions
+mask = mask(:);
+x = x(:);
+if numel(mask) ~= numel(x)
+    error('local_mask_to_segments:DimMismatch', 'mask and x must have same length.');
+end
+
+d = diff([false; mask; false]);
+i1 = find(d==1);
+i2 = find(d==-1)-1;
+
+seg = zeros(numel(i1), 2);
+for k = 1:numel(i1)
+    seg(k,:) = [x(i1(k)), x(i2(k))];
+end
+end
+
+function h = local_mark_segments_strong(seg, yl)
+% Dark, visible shading for low-amplitude regions
+% Returns patch handles for legend use
+
+h = gobjects(0);
+if isempty(seg), return; end
+
+for k = 1:size(seg,1)
+    xL = seg(k,1);
+    xR = seg(k,2);
+
+    h(end+1) = patch( ...
+        [xL xR xR xL], ...
+        [yl(1) yl(1) yl(2) yl(2)], ...
+        [0.65 0.65 0.65], ...   % darker gray
+        'EdgeColor','none', ...
+        'FaceAlpha',0.45);      %#ok<AGROW>
 end
 end

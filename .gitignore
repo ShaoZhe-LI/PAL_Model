@@ -5,12 +5,15 @@
 *.asv
 
 # 禁止加入所有的png图片
-*.png 
+*.png
 *.jpg
 *.bmp
 *.pdf
 *.docx
 # !broadband/fig/*.pdf
+
+# 禁止加入数据保存用的txt文件
+*.txt
 
 # 允许加入特定的png图片
 !fig/

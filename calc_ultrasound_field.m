@@ -206,8 +206,8 @@ if do_king
         W2_c = local_band_window(kr_c, k2r, dk2, tw2);
 
         % ---------- COARSE band contribution ----------
-        F1_cb = (W1_c * ones(1,Nz)) .* F1_c;
-        F2_cb = (W2_c * ones(1,Nz)) .* F2_c;
+        F1_cb = F1_c .* W1_c;
+        F2_cb = F2_c .* W2_c;
 
         phi1_cb = -4*pi * m_FHT(F1_cb, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
             fht.a_solve, fht.x0, fht.x1, fht.k0, source.m_used);
@@ -274,7 +274,6 @@ if do_king
                     'calc.king.gspec_method must be ''analytic'' or ''transform''.');
         end
 
-
         F1_f = G1_f .* Vs1_f;
         F2_f = G2_f .* Vs2_f;
 
@@ -282,8 +281,8 @@ if do_king
         W1_f = local_band_window(kr_f, k1r, dk1, tw1);
         W2_f = local_band_window(kr_f, k2r, dk2, tw2);
 
-        F1_fb = (W1_f * ones(1,Nz)) .* F1_f;
-        F2_fb = (W2_f * ones(1,Nz)) .* F2_f;
+        F1_fb = F1_f .* W1_f;
+        F2_fb = F2_f .* W2_f;
 
         % ---------- fine band contribution (rho-scale FIXED) ----------
         phi1_fb = -4*pi * m_FHT(F1_fb, fht_f.N_FHT, Nz, fht_f.NH, Nh_rho, ...
@@ -296,10 +295,8 @@ if do_king
         phi1_fb_on_c = complex(zeros(size(phi1_c)));
         phi2_fb_on_c = complex(zeros(size(phi2_c)));
 
-        for iz = 1:Nz
-            phi1_fb_on_c(:,iz) = interp1(rho_f, phi1_fb(:,iz), rho_c, 'linear', 0);
-            phi2_fb_on_c(:,iz) = interp1(rho_f, phi2_fb(:,iz), rho_c, 'linear', 0);
-        end
+        phi1_fb_on_c = interp1(log(rho_f), phi1_fb, log(rho_c), 'linear', 0);
+        phi2_fb_on_c = interp1(log(rho_f), phi2_fb, log(rho_c), 'linear', 0);
 
         % ---------- combine ----------
         phi1 = phi1_c - phi1_cb + phi1_fb_on_c;
