@@ -68,6 +68,9 @@ calc.king.band_refine.enable = true;
 calc.asm.pad_factor = 16;
 calc.asm.kzz_eps = 1e-12;
 
+%% -------------------- fig setup --------------------
+fig.unwrap = false;
+
 %% -------------------- save setup --------------------
 if SAVE_PNG
     tstr = datestr(datetime('now'), 'mmdd_HHMM');
@@ -158,8 +161,13 @@ end
 magK = abs(pK);
 magD = abs(pD);
 
-phK = unwrap(angle(pK));
-phD = unwrap(angle(pD));
+if fig.unwrap
+    phK = unwrap(angle(pK));
+    phD = unwrap(angle(pD));
+else
+    phK = (angle(pK));
+    phD = (angle(pD));
+end
 
 eps0 = 1e-12;
 rel_err_log = log10( abs(pD - pK) ./ (abs(pK) + eps0) );
@@ -533,8 +541,8 @@ legend([ ...
 
 % ==================== (3) phase ====================
 subplot(4,1,3);
-plot(rho_ds, unwrap(angle(pK)), 'LineWidth',1.5); hold on;
-plot(rho_ds, unwrap(angle(pD)), '--', 'LineWidth',1.5);
+plot(rho_ds, phK, 'LineWidth',1.5); hold on;
+plot(rho_ds, phD, '--', 'LineWidth',1.5);
 grid on;
 xlabel('\rho (m)'); ylabel('Phase (rad)');
 title('Phase (unwrap)');
@@ -562,6 +570,144 @@ legend('Error','|p|/max < 1e-3','Location','best');
 
 % ---------- save with suffix ----------
 local_save_fig_png(fig2, sprintf('King_vs_DIM_1D_z%.2fm__norm', z_use));
+
+
+%% ============================================================
+% EXTRA FIGS (PHASE-FIX for FHT only; DIM unchanged)
+% 1) 1D compare (4 subplots): ONLY subplot(3) uses FHT phase-extrapolated
+% 2) 2D phase compare (2 subplots): FHT uses phase-extrapolated radial line,
+%    DIM uses RAW radial line
+%
+% NOTE: visualization only (m large -> near-axis low-|p| phase unreliable)
+% ============================================================
+
+thr_phase = thr;   % normalized amplitude threshold for phase fixing
+Lfit      = 200;    % linear-fit points used for inward extrapolation
+thr_u     = 5 * thr_phase;  % 倍数越大越平滑，越小越接近原值 3 5 10
+
+%% -------------------- (A) 1D: 4 subplots (ONLY phase of FHT is replaced) --------------------
+pK_raw = pK(:);           % King line (Nx1)
+pD_raw = pD(:);           % DIM line  (Nx1)
+
+% ONLY fix FHT phase
+pK_fix = local_phase_extrapolate_low_amp(pK_raw, rho_ds(:), thr_phase, thr_u); % King only
+
+magK = abs(pK_raw);
+magD = abs(pD_raw);
+
+if fig.unwrap
+    phK_fix = unwrap(angle(pK_fix));   % fixed King phase
+    phD_raw = unwrap(angle(pD_raw));   % raw DIM phase (unchanged)
+else
+    phK_fix = (angle(pK_fix));   % fixed King phase
+    phD_raw = (angle(pD_raw));   % raw DIM phase (unchanged)
+end
+
+rel_err_log = log10( abs(pD_raw - pK_raw) ./ (abs(pK_raw) + eps0) );
+
+fig1_fix = figure('Name',sprintf('King vs DIM-%s (z≈1 m) [FHT-PHASE-EXTRAP]', ...
+    upper(string(res.calc.dim.method))), 'position',[120 120 1200 1200]);
+
+subplot(4,1,1);
+plot(rho_ds, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
+plot(rho_ds, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
+grid on; xlabel('\rho (m)'); ylabel('SPL (dB)');
+title(sprintf('Magnitude @ z = %.2f m', z_use));
+legend('King','DIM','Location','best');
+
+subplot(4,1,2);
+plot(rho_ds, magK, 'LineWidth',1.5); hold on;
+plot(rho_ds, magD, '--', 'LineWidth',1.5);
+grid on; xlabel('\rho (m)'); ylabel('|p| (Pa)');
+title(sprintf('Magnitude @ z = %.2f m', z_use));
+legend('King','DIM','Location','best');
+
+subplot(4,1,3);
+plot(rho_ds, phK_fix, 'LineWidth',1.5); hold on;
+plot(rho_ds, phD_raw, '--', 'LineWidth',1.5);
+grid on; xlabel('\rho (m)'); ylabel('Phase (rad)');
+title(sprintf('Phase (unwrap): ONLY King extrapolated for |p|/max<%.0e (viz only)', thr_phase));
+legend('King (phase-fixed)','DIM (raw)','Location','best');
+
+subplot(4,1,4);
+plot(rho_ds, rel_err_log, 'LineWidth',1.5);
+grid on; xlabel('\rho (m)'); ylabel('log_{10} relative error');
+title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
+
+local_save_fig_png(fig1_fix, sprintf('King_vs_DIM_1D_z%.2fm__FHTphaseExtrap', z_use));
+
+
+%% -------------------- (B) 2D: phase/pi compare (FHT fixed vs DIM raw) --------------------
+% Build rho_fig from rho_ds (NO interpolation), then crop to r_boundary
+rho_fig = rho_ds(:).';
+pK_line_raw = pK_raw(:).';
+pD_line_raw = pD_raw(:).';
+
+idx_rb = find(rho_fig <= r_boundary, 1, 'last');
+if isempty(idx_rb); idx_rb = numel(rho_fig); end
+rho_fig     = rho_fig(1:idx_rb);
+pK_line_raw = pK_line_raw(1:idx_rb);
+pD_line_raw = pD_line_raw(1:idx_rb);
+
+% ONLY fix FHT radial line
+pK_line_fix = local_phase_extrapolate_low_amp(pK_line_raw, rho_fig, thr_phase, thr_u); % King only
+
+% Polar grid -> Cartesian
+[TH, R] = meshgrid(theta_fig, rho_fig);
+[X, Y]  = pol2cart(TH, R);
+
+% Phase extension for vortex-m
+pK_2D_fix = (pK_line_fix(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH); % FHT fixed
+pD_2D_raw = (pD_line_raw(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH); % DIM raw
+
+PH_K = angle(pK_2D_fix)/pi;
+PH_D = angle(pD_2D_raw)/pi;
+
+figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT fixed vs DIM raw)', z_use, m_use), ...
+    'position',[100 100 1400 650]);
+
+ph_lim = [-1 1];
+
+subplot(1,2,1);
+pcolor(X, Y, PH_K); shading flat
+xlim([-1.2*r_boundary 1.2*r_boundary]);
+ylim([-1.2*r_boundary 1.2*r_boundary]);
+pbaspect([1 1 1])
+colormap('hsv')
+clim(ph_lim);
+clb = colorbar;
+clb.Title.Interpreter = 'latex';
+clb.Title.String = '$\angle p/\pi$';
+set(clb,'Fontsize',18);
+set(gca,'position',[0.07 0.12 0.38 0.78]);
+set(gca,'linewidth',2);
+set(gca,'TickLabelInterpreter','latex');
+xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+title(sprintf('FHT (phase-fixed, thr=%.0e)', thr_phase), 'Interpreter','latex','Fontsize',20);
+
+subplot(1,2,2);
+pcolor(X, Y, PH_D); shading flat
+xlim([-1.2*r_boundary 1.2*r_boundary]);
+ylim([-1.2*r_boundary 1.2*r_boundary]);
+pbaspect([1 1 1])
+colormap('hsv')
+clim(ph_lim);
+clb = colorbar;
+clb.Title.Interpreter = 'latex';
+clb.Title.String = '$\angle p/\pi$';
+set(clb,'Fontsize',18);
+set(gca,'position',[0.55 0.12 0.38 0.78]);
+set(gca,'linewidth',2);
+set(gca,'TickLabelInterpreter','latex');
+xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+title(sprintf('DIM-%s (raw)', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+
+sgtitle(sprintf('$xOy$ Phase$/\\pi$ (FHT phase extrapolated only) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', ...
+    z_use, m_use, r_boundary), 'Interpreter','latex','Fontsize',20);
+
+local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d__FHTphaseExtrap', z_use, m_use));
 
 
 
@@ -810,4 +956,91 @@ for k = 1:size(seg,1)
         'EdgeColor','none', ...
         'FaceAlpha',0.45);      %#ok<AGROW>
 end
+end
+
+function p_out = local_phase_extrapolate_low_amp(p_in, rho, thr, thr_u)
+% Scheme A (recommended):
+% - Build extrapolated phase using PCHIP on reliable region (|p|/max >= thr)
+% - Replace low-amplitude phase by extrapolated phase
+% - Use smooth blending in [thr, thr_u] to avoid a kink at the boundary
+% - Magnitude is unchanged (visualization only)
+%
+% Inputs:
+%   p_in  : complex vector (Nx1 or 1xN)
+%   rho   : real vector (same length as p_in)
+%   thr   : normalized threshold (e.g., 1e-3)
+%   thr_u : upper threshold for blending (e.g., 5e-3). If omitted, thr_u=5*thr
+%
+% Output:
+%   p_out : same size as p_in, magnitude unchanged, phase modified near axis
+
+if nargin < 4 || isempty(thr_u)
+    thr_u = 5*thr;
+end
+thr_u = max(thr_u, thr*(1+1e-12));  % ensure thr_u > thr
+
+p = p_in(:);
+r = rho(:);
+
+if numel(p) ~= numel(r)
+    error('local_phase_extrapolate_low_amp:DimMismatch', 'p_in and rho must have same length.');
+end
+
+A = abs(p);
+Amax = max(A);
+if ~(isfinite(Amax)) || Amax <= 0
+    p_out = p_in;
+    return;
+end
+an = A / Amax;
+
+% unwrap phase from raw complex data
+phi_raw = unwrap(angle(p));
+
+% reliable indices
+I = find(an >= thr);
+if numel(I) < 10
+    % not enough support for a stable pchip
+    p_out = p_in;
+    return;
+end
+
+% ensure r is strictly increasing for pchip (it should be in your FHT grid)
+% if not, sort (robust)
+if any(diff(r) <= 0)
+    [rS, idxS] = sort(r);
+    pS = p(idxS);
+    AS = abs(pS);
+    anS = AS / max(AS);
+    phiS = unwrap(angle(pS));
+    IS = find(anS >= thr);
+    if numel(IS) < 10
+        p_out = p_in; return;
+    end
+    phi_ext_S = pchip(rS(IS), phiS(IS), rS);
+    % blending weights on sorted grid
+    wS = (anS - thr) / (thr_u - thr);
+    wS = min(max(wS, 0), 1);
+    phi_new_S = (1-wS).*phi_ext_S + wS.*phiS;
+    p2S = AS .* exp(1j*phi_new_S);
+    % unsort back
+    p2 = zeros(size(p2S));
+    p2(idxS) = p2S;
+else
+    % extrapolated phase from reliable points (shape-preserving)
+    phi_ext = pchip(r(I), phi_raw(I), r);
+
+    % blending weights
+    w = (an - thr) / (thr_u - thr);
+    w = min(max(w, 0), 1);
+
+    % phase mix: low amp -> extrapolated, high amp -> raw
+    phi_new = (1-w).*phi_ext + w.*phi_raw;
+
+    % rebuild with same magnitude
+    p2 = A .* exp(1j*phi_new);
+end
+
+% restore original shape
+p_out = reshape(p2, size(p_in));
 end
