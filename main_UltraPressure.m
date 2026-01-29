@@ -11,7 +11,7 @@ clear; clc; close all;
 
 %% -------------------- save figures (GLOBAL control) --------------------
 global SAVE_PNG SAVE_DIR
-SAVE_PNG = false;   % <<< 全局开关：true 保存；false 不保存
+SAVE_PNG = true;   % <<< 全局开关：true 保存；false 不保存
 
 %% -------------------- medium --------------------
 medium.c0 = 343;
@@ -82,7 +82,7 @@ if SAVE_PNG
         mkdir(SAVE_DIR);
     end
 
-    local_write_runinfo_txt(SAVE_DIR, medium, source, calc);  % <<< 新增
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig);
 else
     SAVE_DIR = '';
 end
@@ -197,7 +197,7 @@ plot(rho_ds, phK, 'LineWidth',1.5); hold on;
 plot(rho_ds, phD, '--', 'LineWidth',1.5);
 grid on;
 xlabel('\rho (m)'); ylabel('Phase (rad)');
-title('Phase (unwrap)');
+title('Phase');
 legend('King','DIM');
 
 subplot(4,1,4);
@@ -545,7 +545,7 @@ plot(rho_ds, phK, 'LineWidth',1.5); hold on;
 plot(rho_ds, phD, '--', 'LineWidth',1.5);
 grid on;
 xlabel('\rho (m)'); ylabel('Phase (rad)');
-title('Phase (unwrap)');
+title('Phase');
 
 yl = ylim;
 local_mark_segments_strong(segU, yl);
@@ -626,8 +626,8 @@ subplot(4,1,3);
 plot(rho_ds, phK_fix, 'LineWidth',1.5); hold on;
 plot(rho_ds, phD_raw, '--', 'LineWidth',1.5);
 grid on; xlabel('\rho (m)'); ylabel('Phase (rad)');
-title(sprintf('Phase (unwrap): ONLY King extrapolated for |p|/max<%.0e (viz only)', thr_phase));
-legend('King (phase-fixed)','DIM (raw)','Location','best');
+title(sprintf('Phase: ONLY King extrapolated for |p|/max<%.0e (viz only)', thr_phase));
+legend('King (phase-fixed)','DIM','Location','best');
 
 subplot(4,1,4);
 plot(rho_ds, rel_err_log, 'LineWidth',1.5);
@@ -663,7 +663,7 @@ pD_2D_raw = (pD_line_raw(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH); % 
 PH_K = angle(pK_2D_fix)/pi;
 PH_D = angle(pD_2D_raw)/pi;
 
-figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT fixed vs DIM raw)', z_use, m_use), ...
+figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT fixed vs DIM)', z_use, m_use), ...
     'position',[100 100 1400 650]);
 
 ph_lim = [-1 1];
@@ -702,7 +702,7 @@ set(gca,'linewidth',2);
 set(gca,'TickLabelInterpreter','latex');
 xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
 ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title(sprintf('DIM-%s (raw)', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
 
 sgtitle(sprintf('$xOy$ Phase$/\\pi$ (FHT phase extrapolated only) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', ...
     z_use, m_use, r_boundary), 'Interpreter','latex','Fontsize',20);
@@ -789,7 +789,7 @@ for k = 1:numel(bad)
 end
 end
 
-function local_write_runinfo_txt(save_dir, medium, source, calc)
+function local_write_runinfo_txt(save_dir, medium, source, calc, fig)
 % Write run configuration into a text file under save_dir.
 % Primary section: explicitly listed user parameters (fixed order)
 % Secondary section: auto-dump of remaining fields
@@ -872,6 +872,12 @@ written.calc.king.gspec_method = true;
 fprintf(fid, 'calc.king.band_refine.enable = %s;\n', ...
     local_bool_str(calc.king.band_refine.enable));
 written.calc.king.band_refine.enable = true;
+fprintf(fid, '\n');
+
+% -------------------- fig --------------------
+fprintf(fid, '%% -------------------- fig --------------------\n');
+fprintf(fid, 'fig.unwrap = %s;\n', local_bool_str(fig.unwrap));
+fprintf(fid, '\n');
 
 fprintf(fid, '\n');
 
