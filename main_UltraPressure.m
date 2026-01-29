@@ -11,7 +11,7 @@ clear; clc; close all;
 
 %% -------------------- save figures (GLOBAL control) --------------------
 global SAVE_PNG SAVE_DIR
-SAVE_PNG = true;   % <<< 全局开关：true 保存；false 不保存
+SAVE_PNG = false;   % <<< 全局开关：true 保存；false 不保存
 
 %% -------------------- medium --------------------
 medium.c0 = 343;
