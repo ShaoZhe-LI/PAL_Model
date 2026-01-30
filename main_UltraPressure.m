@@ -59,7 +59,7 @@ calc.king.eps_kzz = 1e-3; % keep your naming
 calc.king.eps_phase = calc.king.eps_kzz;
 calc.king.kz_min = 1e-12;
 
-calc.king.band_refine.enable = true;
+calc.king.band_refine.enable = true; % 'true' or 'false'
 % 本行决定是否局部加细以改善近轴结果
 % 计算发现，局部加细比等倍率的全局加细更加耗时，且效果不如后者，后续应改善
 % 相应的，局部加细占用内存会少于全局加细
