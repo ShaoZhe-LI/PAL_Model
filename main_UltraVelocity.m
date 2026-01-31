@@ -31,7 +31,7 @@ source.profile = 'Vortex-m';
 source.a = 0.1;
 source.v0 = 0.172;
 source.v_ratio = 1;
-source.m = 10;
+source.m = 1;
 source.F = 0.2;
 
 source.f1 = 42e3;
@@ -311,6 +311,16 @@ sgtitle(sprintf('$xOy$ scalar $s=v\\cdot v$ @ $z=%.3f$ m, $m=%d$, $r\\le%.2f$ m'
 local_save_fig_png(gcf, sprintf('xOy_vdotv_z%.3fm_m%d', z_use, m_use));
 
 fprintf('\nDONE.\n');
+
+
+
+
+
+
+
+
+
+
 
 %% ==================== local functions ====================
 
