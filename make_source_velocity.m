@@ -242,7 +242,11 @@ switch profile
             if ~has1 && has2; vrho_core_1 = vrho_core_2; end
             if has1 && ~has2; vrho_core_2 = vrho_core_1; end
         end
-        m_use = 0;
+        if isfield(source,'m_custom') && ~isempty(source.m_custom)
+            m_use = source.m_custom;
+        else
+            m_use = 0;
+        end
 
     otherwise
         error('make_source_velocity:UnknownProfile', ...
@@ -657,9 +661,9 @@ for i = 1:Nr
     Nth0    = max(32, Nth_geo);   % base requirement
 
     if m_use == 0
-        Nth = Nth0;        
+        Nth = Nth0;
     else
-        Nth = ceil(Nth0 / abs(m_use)) * m_use;        
+        Nth = ceil(Nth0 / abs(m_use)) * m_use;
     end
 
     dth = 2*pi / Nth;
