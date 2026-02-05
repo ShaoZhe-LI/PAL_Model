@@ -219,34 +219,83 @@ switch profile
         vrho_core_2 = @(rho) source.v_ratio * v0 .* (max(rho,0)./a).^n;
         m_use = 0;
 
-    case 'custom'
-        % Allow separate custom handles for f1 and f2
+        case 'custom'
+        % =============================================================
+        % Custom supports TWO kinds of user inputs:
+        %   (A) radial handles: custom_vrho_handle_1/2 (or custom_vrho_handle)
+        %   (B) 2D handles:     custom_vn_xy_handle_1/2
+        %
+        % Priority:
+        %   - If vn_xy handles exist -> use them for DIM (and set radial to 0 placeholder)
+        %   - Else -> require vrho handle(s) as before
+        % =============================================================
+
+        % ---- check 2D handles ----
+        has_vn1 = isfield(source,'custom_vn_xy_handle_1') && isa(source.custom_vn_xy_handle_1,'function_handle');
+        has_vn2 = isfield(source,'custom_vn_xy_handle_2') && isa(source.custom_vn_xy_handle_2,'function_handle');
+
+        % ---- check radial handles ----
         has1 = isfield(source,'custom_vrho_handle_1') && isa(source.custom_vrho_handle_1,'function_handle');
         has2 = isfield(source,'custom_vrho_handle_2') && isa(source.custom_vrho_handle_2,'function_handle');
+        has_single = isfield(source,'custom_vrho_handle') && isa(source.custom_vrho_handle,'function_handle');
 
-        if ~has1 && ~has2
-            % Backward compatibility: accept source.custom_vrho_handle as single handle
-            has = isfield(source,'custom_vrho_handle') && isa(source.custom_vrho_handle,'function_handle');
-            if ~has
+        if (has_vn1 || has_vn2)
+            % ========== Mode B: arbitrary vn(x,y) ==========
+            % Provide radial "placeholder" (zeros) so FHT-related code won't crash.
+            vrho_core_1 = @(rho) 0*rho;
+            vrho_core_2 = @(rho) 0*rho;
+
+            % Choose m
+            if isfield(source,'m_custom') && ~isempty(source.m_custom)
+                m_use = source.m_custom;
+            else
+                m_use = 0;
+            end
+
+            % Build vn_xy directly from user handles, masked by disk
+            if has_vn1
+                vn_xy_1 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_1);
+            else
+                % if only vn2 provided, reuse it
+                vn_xy_1 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_2);
+            end
+
+            if has_vn2
+                vn_xy_2 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_2);
+            else
+                % if only vn1 provided, reuse it
+                vn_xy_2 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_1);
+            end
+
+        else
+            % ========== Mode A: radial vrho(r) (legacy behavior) ==========
+            if ~(has1 || has2 || has_single)
                 error('make_source_velocity:MissingCustomHandle', ...
                     ['For profile="Custom", provide one of:\n', ...
-                    '  source.custom_vrho_handle (single), or\n', ...
-                    '  source.custom_vrho_handle_1 and/or source.custom_vrho_handle_2.']);
+                     '  (A) source.custom_vrho_handle (single), or\n', ...
+                     '      source.custom_vrho_handle_1 and/or source.custom_vrho_handle_2, or\n', ...
+                     '  (B) source.custom_vn_xy_handle_1 and/or source.custom_vn_xy_handle_2.\n']);
             end
-            vrho_core_1 = source.custom_vrho_handle;
-            vrho_core_2 = source.custom_vrho_handle;
-        else
-            if has1; vrho_core_1 = source.custom_vrho_handle_1; end
-            if has2; vrho_core_2 = source.custom_vrho_handle_2; end
-            % If only one is provided, reuse it for the other
-            if ~has1 && has2; vrho_core_1 = vrho_core_2; end
-            if has1 && ~has2; vrho_core_2 = vrho_core_1; end
-        end
+
+            if has_single
+                vrho_core_1 = source.custom_vrho_handle;
+                vrho_core_2 = source.custom_vrho_handle;
+            else
+                if has1; vrho_core_1 = source.custom_vrho_handle_1; end
+                if has2; vrho_core_2 = source.custom_vrho_handle_2; end
+                if ~has1 && has2; vrho_core_1 = vrho_core_2; end
+                if has1 && ~has2; vrho_core_2 = vrho_core_1; end
+            end
+
             if isfield(source,'m_custom') && ~isempty(source.m_custom)
-        m_use = source.m_custom;
-    else
-        m_use = 0;
-    end
+                m_use = source.m_custom;
+            else
+                m_use = 0;
+            end
+
+            % vn_xy will be constructed later by the common code:
+            % vn_xy = vs_rho(rho) .* exp(1i*m*phi)
+        end
 
     otherwise
         error('make_source_velocity:UnknownProfile', ...
@@ -264,19 +313,22 @@ source.m_used = m_use;
 vs_rho_1 = @(rho) local_vrho_masked(rho, a, vrho_core_1);
 vs_rho_2 = @(rho) local_vrho_masked(rho, a, vrho_core_2);
 
-has_vn1 = isfield(source,'custom_vn_xy_handle_1') && isa(source.custom_vn_xy_handle_1,'function_handle');
-has_vn2 = isfield(source,'custom_vn_xy_handle_2') && isa(source.custom_vn_xy_handle_2,'function_handle');
+% If vn_xy_1/2 already defined in Custom-mode-B, keep them.
+if ~exist('vn_xy_1','var') || ~exist('vn_xy_2','var')
+    has_vn1 = isfield(source,'custom_vn_xy_handle_1') && isa(source.custom_vn_xy_handle_1,'function_handle');
+    has_vn2 = isfield(source,'custom_vn_xy_handle_2') && isa(source.custom_vn_xy_handle_2,'function_handle');
 
-if has_vn1
-    vn_xy_1 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_1);
-else
-    vn_xy_1 = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_1, source.m_used);
-end
+    if has_vn1
+        vn_xy_1 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_1);
+    else
+        vn_xy_1 = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_1, source.m_used);
+    end
 
-if has_vn2
-    vn_xy_2 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_2);
-else
-    vn_xy_2 = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_2, source.m_used);
+    if has_vn2
+        vn_xy_2 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_2);
+    else
+        vn_xy_2 = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_2, source.m_used);
+    end
 end
 
 % =========================================================================
