@@ -1,20 +1,23 @@
 %% ============================================================
-% MAIN: DIM-only spiral-source (paper-like) velocity @ z = z_obs
-% - Source: circular spiral binary phase grating (0/pi) as vibrating surface
-% - Requires: make_source_velocity.m  (your updated version supports
-%             source.custom_vn_xy_handle_1/2)
-% - Calls:    calc_ultrasound_velocity_field(...,'dim')
+% MAIN: DIM-only Bessel beam velocity @ z≈1 m (2D plane)
+% - Calls:
+%   make_source_velocity.m
+%   calc_ultrasound_velocity_field.m   (method='dim')
 %
-% Plots (DIM, f2) on z=z_use plane:
-%   0) |v| + quiver(Re{v_x,v_y})      + angle(vz)/pi
-%   1) v_x : |v_x| + angle(v_x)/pi
-%   2) v_y : |v_y| + angle(v_y)/pi
-%   3) v_z : |v_z| + angle(v_z)/pi
-%   4) s=v·v (NO conj): |s| + angle(s)/pi
+% - Source: multi-ring superposition + optional axicon radial phase
+%   v_rho(r) = w_ring(bin(r)) * exp(-j*k*sin(theta)*r)
+%   v_n(r,phi) = v_rho(r) * exp(j*n*phi)     (n via source.m_custom)
 %
-% Colormap:
-%   - magnitude: hsv + shading interp  (consistent with other components)
-%   - phase:     hsv + shading interp  (avoid pixel grid; note phase jump artifacts possible)
+% - Plots (DIM, f2) on z=z_use plane:
+%   0) |v| (interp) + quiver(Re{v_x,v_y})      + phase(vz)/pi (flat)
+%   1) v_x : |v_x| (interp) + angle(v_x)/pi (flat)
+%   2) v_y : |v_y| (interp) + angle(v_y)/pi (flat)
+%   3) v_z : |v_z| (interp) + angle(v_z)/pi (flat)
+%   4) s=v·v (NO conjugate): |s| (interp) + angle(s)/pi (flat)
+%
+% Style:
+%   - magnitude: colormap(MyColor('vik')), shading interp
+%   - phase:     colormap(hsv),           shading flat, range [-1,1]
 % ============================================================
 
 clear; clc; close all;
@@ -22,6 +25,8 @@ clear; clc; close all;
 %% -------------------- save figures (GLOBAL control) --------------------
 global SAVE_PNG SAVE_DIR
 SAVE_PNG = false;
+
+showbig = false;
 
 %% -------------------- profiler helpers --------------------
 get_mem_mb = @() local_get_mem_mb();
@@ -35,103 +40,94 @@ medium.pref = 2e-5;
 medium.use_absorp = false;
 medium.atten_handle = [];
 
-%% ============================================================
-% SOURCE (paper parameters): circular spiral grating (binary phase)
-% From the paper snippet (your page2.png):
-%   M = 5 turns, r0 = 10 mm, f = 97 kHz, theta0 = pi/4 => P = sqrt(2)*lambda
-%   dP = 0.45 P
-% ============================================================
-source = struct();
-source.profile = 'Custom';
+%% -------------------- source (multi-ring superposition) --------------------
+n = 1;                      % n阶贝塞尔（同时也是角向阶数）
+source.profile = 'Custom';  % 用 Custom 自定义 v_rho(r)
+source.a = 0.035;
+source.v0 = 0.172;
+source.v_ratio = 1;
 
-% frequencies (keep PAL-compatible; f2 used in DIM by default)
+% 关键：需要你在 make_source_velocity.m 的 Custom 分支里启用 m_custom
+% （见文末“必要改动”说明）
+source.m_custom = n;        % vn(x,y)=v_rho(r)*exp(j*n*phi)
+
 source.f1 = 97e3;
 source.fa = 2e3;
 source.f2 = source.f1 + source.fa;
 
-% basic amplitude (surface normal velocity magnitude)
-source.v0 = 0.172;
-source.v_ratio = 1;
+% n阶（角向因子仍由 exp(j*n*phi) 提供）
+theta_deg = 45;
+theta = deg2rad(theta_deg);
 
-% IMPORTANT: for arbitrary 2D vn(x,y), set m_custom = 0 (do NOT add exp(j*m*phi))
-source.m_custom = 0;
+k1r = 2*pi*source.f1/medium.c0;
+k2r = 2*pi*source.f2/medium.c0;
+kr1 = k1r*sin(theta);
+kr2 = k2r*sin(theta);
 
-% wavelength at f1 (paper uses monochromatic 97 kHz)
-lambda1 = medium.c0 / source.f1;
-
-% grating parameters
-theta0 = pi/4;              % cone angle in geometric grating design
-P  = sqrt(2) * lambda1;      % from paper: theta0=pi/4 => P = sqrt(2)*lambda
-dP = 0.45 * P;               % from paper: dP = 0.45 P
-M  = 5;                      % turns
-r0 = 10e-3;                  % minimum radius (m)
-
-% aperture radius implied by spiral extent
-a_spiral = r0 + M * P;
-source.a = a_spiral;
-
-% choose handedness: +1 (CCW) or -1 (CW)
-handed = +1;
-
-% Define the spiral binary phase grating as vn(x,y):
-%   u = rho - r0 - b*phi, b = P/(2*pi)
-%   mask = mod(u,P) < dP  => phase 0, else phase pi  (=> +1 / -1)
-%   vn = v0 * (+1 or -1) inside spiral annulus; 0 outside
-vn_handle = @(X,Y) local_spiral_binary_grating_vn(X,Y, ...
-    source.v0, source.a, r0, P, dP, M, handed);
-
-% Use same vn for f1 and f2 (paper is monochromatic; here keep consistent)
-source.custom_vn_xy_handle_1 = vn_handle;
-source.custom_vn_xy_handle_2 = @(X,Y) (source.v_ratio) * vn_handle(X,Y);
+% v_rho(r) = v0 * J_n(kr*r)   (r<=a)
+source.custom_vrho_handle_1 = @(rho) source.v0 .* besselj(n, kr1.*rho);
+source.custom_vrho_handle_2 = @(rho) (source.v_ratio*source.v0) .* besselj(n, kr2.*rho);
 
 %% -------------------- calc --------------------
 calc = struct();
 
-% FHT fields not used, but make_source_velocity needs defaults
-calc.fht.N_FHT      = 32768;
-calc.fht.rho_max    = 0.25;
-calc.fht.Nh_scale   = 1.2;
-calc.fht.NH_scale   = 4;
+% FHT fields not used, but required by make_source_velocity() defaults
+calc.fht.N_FHT = 32768;
+calc.fht.rho_max = 0.25;
+calc.fht.Nh_scale = 1.2;
+calc.fht.NH_scale = 4;
 calc.fht.Nh_v_scale = 1.1;
-calc.fht.zu_max     = 0.2;
-calc.fht.za_max     = 0.2;
+calc.fht.zu_max = 1.2;
+calc.fht.za_max = 1;
 
-% DIM discretization
+% DIM source discretization
 calc.dim.use_freq = 'f2';
 calc.dim.dis_coe  = 16;
 calc.dim.margin   = 1;
-calc.dim.src_discretization = 'polar';     % 'cart' or 'polar'
+calc.dim.src_discretization = 'polar';   % 'cart' or 'polar'
 
 % DIM blocks
 calc.dim.block_size     = 20000;
 calc.dim.src_block_size = 5000;
 
-%% ============================================================
-% Target z from paper Eq.(3):
-%   z_min = r0 * (P/lambda) * sqrt(1 - lambda^2/P^2)
-%   z_max = z_min * (1 + M*P/r0)
-%   z_obs = (z_min+z_max)/2
-% With P = sqrt(2)*lambda => z_min = r0
-% ============================================================
-z_min = r0;                  % simplifies under P=sqrt(2)lambda
-z_max = z_min * (1 + M*P/r0);
-z_target = 0.5 * (z_min + z_max);
+%% -------------------- fig setup --------------------
+fig = {};
 
-% Get consistent z grid from make_source_velocity (your function)
+%% -------------------- save setup --------------------
+if SAVE_PNG
+    tstr = datestr(datetime('now'), 'mmdd_HHMM');
+    a_str = sprintf('%.2fm', source.a);
+    m_str = sprintf('m=%d', source.m_custom);
+    SAVE_DIR = sprintf('%s_%s__%s_Bessel', a_str, m_str, tstr);
+
+    if ~exist(SAVE_DIR, 'dir')
+        mkdir(SAVE_DIR);
+    end
+
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig);
+else
+    SAVE_DIR = '';
+end
+
+%% -------------------- target plane (z≈1 m) --------------------
+z_target = 0.05;
+
+% Get consistent z grid from make_source_velocity
 [~, fht_tmp] = make_source_velocity(source, medium, calc);
 z_full = fht_tmp.z_ultra(:);
 [~, iz] = min(abs(z_full - z_target));
 z_use = z_full(iz);
+
 calc.dim.z_use = z_use;
 
-%% ============================================================
-% Observation plane range (paper figures use scale bar ~ lambda)
-% Use square with full width ~ lambda (so half-width = lambda/2)
-% ============================================================
-lambda2 = medium.c0 / source.f2;          % for reference
-half_width = 0.5 * lambda1;              % match paper scale bar ~ lambda
-r_boundary = 1.2 * half_width;           % small margin
-dx_obs = half_width / 64;                   % resolution
+%% -------------------- observation grid (xOy) --------------------
+r_boundary = medium.c0 / source.f1 / 2;        % plot window
+dx_obs = medium.c0 / source.f1 / 2 / 64;           % observation spacing
+
+if showbig
+r_boundary = 0.12;        % plot window
+dx_obs = 0.004;           % observation spacing
+end
 
 x_obs = -r_boundary:dx_obs:r_boundary;
 y_obs = -r_boundary:dx_obs:r_boundary;
@@ -144,13 +140,9 @@ calc.dim.obs_grid.z = z_use;
 %% ============================================================
 % Compute (DIM ONLY) + timing/memory
 %% ============================================================
-fprintf('\n==================== DIM VELOCITY (SPIRAL SOURCE) ====================\n');
-fprintf('f1=%.1f kHz, f2=%.1f kHz, lambda1=%.4g m\n', source.f1/1e3, source.f2/1e3, lambda1);
-fprintf('Spiral: M=%d, r0=%.3g m, P=%.3g m, dP=%.3g m, a=%.3g m, handed=%+d\n', ...
-    M, r0, P, dP, source.a, handed);
-fprintf('z_target=%.6f m, z_use=%.6f m\n', z_target, z_use);
-fprintf('obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
-    numel(x_obs), numel(y_obs), dx_obs, r_boundary);
+fprintf('\n==================== DIM VELOCITY ====================\n');
+fprintf('z_target=%.3f, z_use=%.6f\n', z_target, z_use);
+fprintf('obs grid: Nx=%d, Ny=%d, dx=%.4g m, r_boundary=%.4g m\n', numel(x_obs), numel(y_obs), dx_obs, r_boundary);
 
 mem0 = get_mem_mb(); t0 = tic;
 resV = calc_ultrasound_velocity_field(source, medium, calc, 'dim');
@@ -169,6 +161,7 @@ vZ = resV.dim.v_z_f2;
 
 S  = vX.^2 + vY.^2 + vZ.^2;                       % v·v (NO conjugate)
 Vmag = sqrt(abs(vX).^2 + abs(vY).^2 + abs(vZ).^2);
+VZph = angle(vZ)/pi;
 
 %% -------------------- plot settings --------------------
 lim_ph = [-1 1];
@@ -177,22 +170,22 @@ lim_vx = [min(abs(vX(:))), max(abs(vX(:)))];
 lim_vy = [min(abs(vY(:))), max(abs(vY(:)))];
 lim_vz = [min(abs(vZ(:))), max(abs(vZ(:)))];
 lim_s  = [min(abs(S(:))),  max(abs(S(:)))];
-lim_v  = [min(Vmag(:)),    max(Vmag(:))];
+lim_v  = [min(Vmag(:)),     max(Vmag(:))];
 
 %% ============================================================
-% Fig0: |v| + quiver(Re{v_x,v_y})  AND  angle(vz)/pi
+% Fig0: |v| + quiver(Re{v_x,v_y})  AND  phase(vz)/pi
 %% ============================================================
 do_quiver = true;
 
-figure('Name', sprintf('|v| & angle(vz) @ z=%.3f m', z_use), ...
+figure('Name', sprintf('|v| & phase(vz) @ z=%.3f m', z_use), ...
     'position',[100 100 1400 650], 'Color','w');
 set(gcf,'Renderer','opengl');
 
 % ---- |v| ----
 subplot(1,2,1);
 surf(X, Y, zeros(size(X)), Vmag, 'EdgeColor','none'); view(2);
-shading interp; colormap(hsv);
-if lim_v(2) > lim_v(1), clim(lim_v); end
+shading interp; colormap(MyColor('vik'));
+if all(isfinite(lim_v)) && lim_v(2) > lim_v(1), clim(lim_v); end
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$|v|$';
 set(clb,'Fontsize',18);
 
@@ -216,9 +209,9 @@ if do_quiver
     hold off;
 end
 
-% ---- angle(vz)/pi ----
+% ---- phase(vz)/pi ----
 subplot(1,2,2);
-surf(X, Y, zeros(size(X)), angle(vZ)/pi, 'EdgeColor','none'); view(2);
+surf(X, Y, zeros(size(X)), VZph, 'EdgeColor','none'); view(2);
 shading interp; colormap(hsv); clim(lim_ph);
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$\angle v_z/\pi$';
 set(clb,'Fontsize',18);
@@ -229,39 +222,40 @@ set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points')
 xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
 title('$\angle v_z/\pi$', 'Interpreter','latex','Fontsize',18);
 
-sgtitle(sprintf('Spiral source (paper-like), DIM @ $z=%.3f$ m, $f_2=%.1f$ kHz', z_use, source.f2/1e3), ...
+sgtitle(sprintf('DIM, $f=%.1f$ kHz, $\\theta=%.1f^\\circ$, $n=%d$', source.f2/1e3, theta_deg, n), ...
     'Interpreter','latex','Fontsize',18);
 
-local_save_fig_png(gcf, sprintf('DIM_Vmag_PhaseVz_spiral_z%.3f', z_use));
+local_save_fig_png(gcf, sprintf('DIM_Vmag_PhaseVz_z%.3f', z_use));
 
 %% ============================================================
 % Fig1..4: v_x, v_y, v_z, s=v·v  (mag/phase)
 %% ============================================================
-local_plot_mag_phase_cart(X, Y, vX, 'v_x', z_use, source.f2, lim_vx, lim_ph);
-local_save_fig_png(gcf, sprintf('DIM_vx_magphase_spiral_z%.3f', z_use));
+local_plot_mag_phase_cart(X, Y, vX, 'v_x', z_use, source.f2, theta_deg, lim_vx, lim_ph);
+local_save_fig_png(gcf, sprintf('DIM_vx_magphase_z%.3f', z_use));
 
-local_plot_mag_phase_cart(X, Y, vY, 'v_y', z_use, source.f2, lim_vy, lim_ph);
-local_save_fig_png(gcf, sprintf('DIM_vy_magphase_spiral_z%.3f', z_use));
+local_plot_mag_phase_cart(X, Y, vY, 'v_y', z_use, source.f2, theta_deg, lim_vy, lim_ph);
+local_save_fig_png(gcf, sprintf('DIM_vy_magphase_z%.3f', z_use));
 
-local_plot_mag_phase_cart(X, Y, vZ, 'v_z', z_use, source.f2, lim_vz, lim_ph);
-local_save_fig_png(gcf, sprintf('DIM_vz_magphase_spiral_z%.3f', z_use));
+local_plot_mag_phase_cart(X, Y, vZ, 'v_z', z_use, source.f2, theta_deg, lim_vz, lim_ph);
+local_save_fig_png(gcf, sprintf('DIM_vz_magphase_z%.3f', z_use));
 
-local_plot_mag_phase_cart(X, Y, S, 's=v\cdot v', z_use, source.f2, lim_s, lim_ph, true);
-local_save_fig_png(gcf, sprintf('DIM_s_vdotv_magphase_spiral_z%.3f', z_use));
+local_plot_mag_phase_cart(X, Y, S, 's=v\cdot v', z_use, source.f2, theta_deg, lim_s, lim_ph, true);
+local_save_fig_png(gcf, sprintf('DIM_s_vdotv_magphase_z%.3f', z_use));
+
 
 %% ==================== local functions ====================
 
-function local_plot_mag_phase_cart(X, Y, V, nameStr, z_use, f_hz, lim_mag, lim_ph, isS)
-if nargin < 9, isS = false; end
+function local_plot_mag_phase_cart(X, Y, V, nameStr, z_use, f_hz, theta_deg, lim_mag, lim_ph, isS)
+if nargin < 10, isS = false; end
 
 figure('Color','w', 'Position',[100 100 1400 650], ...
     'Name',sprintf('%s (DIM) @ z=%.3f m', nameStr, z_use));
 set(gcf,'Renderer','opengl');
 
-% ----- magnitude -----
+% ----- magnitude (interp) -----
 subplot(1,2,1);
 surf(X, Y, zeros(size(X)), abs(V), 'EdgeColor','none'); view(2);
-shading interp; colormap(hsv);
+shading interp; colormap(MyColor('vik'));
 if all(isfinite(lim_mag)) && lim_mag(2) > lim_mag(1), clim(lim_mag); end
 clb = colorbar;
 clb.Title.Interpreter = 'latex';
@@ -278,10 +272,11 @@ set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points')
 xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
 title(sprintf('Magnitude @ $z=%.3f$ m', z_use), 'Interpreter','latex','Fontsize',18);
 
-% ----- phase/pi -----
+% ----- phase/pi (flat) -----
 subplot(1,2,2);
 surf(X, Y, zeros(size(X)), angle(V)/pi, 'EdgeColor','none'); view(2);
-shading interp; colormap(hsv); clim(lim_ph);
+shading flat; colormap(hsv);
+clim(lim_ph);
 clb = colorbar;
 clb.Title.Interpreter = 'latex';
 if ~isS
@@ -297,38 +292,19 @@ set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points')
 xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
 title('Phase', 'Interpreter','latex','Fontsize',18);
 
-sgtitle(sprintf('DIM, $f=%.1f$ kHz', f_hz/1e3), 'Interpreter','latex','Fontsize',18);
+sgtitle(sprintf('DIM, $f=%.1f$ kHz, $\\theta=%.1f^\\circ$', f_hz/1e3, theta_deg), ...
+    'Interpreter','latex','Fontsize',18);
 end
 
-function vn = local_spiral_binary_grating_vn(X,Y,v0,a,r0,P,dP,M,handed)
-% Binary phase spiral grating (0/pi) on an annulus [r0, r0+M*P]
-% handed: +1 CCW, -1 CW (controls spiral chirality)
+function vr = local_vrho_rings(rho, r_edges, w_ring)
+rho = abs(rho);
+vr = zeros(size(rho));
 
-rho = hypot(X,Y);
-phi = atan2(Y,X);                    % [-pi,pi]
-
-vn = zeros(size(rho));
-
-r1 = r0 + M*P;
-mask_ap = (rho <= a) & (rho >= r0) & (rho <= r1);
-
-if ~any(mask_ap(:)), return; end
-
-b = P/(2*pi);
-
-% Spiral coordinate (Archimedean): rho = r0 + b*(handed*phi) + k*P
-u = rho(mask_ap) - r0 - b*(handed*phi(mask_ap));
-
-t = mod(u, P);                       % [0,P)
-
-% duty cycle: dP/P
-on = (t < dP);
-
-% two phase levels: 0 or pi => +1 or -1
-g = ones(size(t));
-g(~on) = -1;
-
-vn(mask_ap) = v0 * g;
+q = discretize(rho, r_edges);   % 1..Q, NaN outside
+mask = ~isnan(q);
+if any(mask(:))
+    vr(mask) = w_ring(q(mask));
+end
 end
 
 function mem_mb = local_get_mem_mb()
@@ -377,5 +353,134 @@ s = strrep(s, ' ', '_');
 bad = '<>:"/\|?*';
 for k = 1:numel(bad)
     s = strrep(s, bad(k), '_');
+end
+end
+
+function local_write_runinfo_txt(save_dir, medium, source, calc, fig)
+% Write run configuration into a text file under save_dir.
+% Primary section: explicitly listed user parameters (fixed order)
+% Secondary section: auto-dump of remaining fields
+
+fp = fullfile(save_dir, 'run_info.txt');
+fid = fopen(fp, 'w');
+if fid < 0
+    warning('Cannot create run_info.txt in %s', save_dir);
+    return;
+end
+cleanupObj = onCleanup(@() fclose(fid));
+
+written = struct();   % record written fields to avoid duplication
+
+fprintf(fid, '===== RUN INFO =====\n');
+fprintf(fid, 'Time: %s\n\n', datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS'));
+
+%% =========================================================
+fprintf(fid, '===== PRIMARY PARAMETERS (USER SPECIFIED) =====\n\n');
+
+% -------------------- medium --------------------
+fprintf(fid, '%% -------------------- medium --------------------\n');
+fprintf(fid, 'medium.c0 = %.15g;\n', medium.c0);           written.medium.c0 = true;
+fprintf(fid, 'medium.rho0 = %.15g;\n', medium.rho0);       written.medium.rho0 = true;
+fprintf(fid, 'medium.beta = %.15g;\n', medium.beta);       written.medium.beta = true;
+fprintf(fid, 'medium.pref = %.15g;\n', medium.pref);       written.medium.pref = true;
+% fprintf(fid, 'medium.use_absorp = %s;\n', local_bool_str(medium.use_absorp));
+written.medium.use_absorp = true;
+
+if isfield(medium,'atten_handle')
+    fprintf(fid, 'medium.atten_handle = @(f) AbsorpAttenCoef(f);\n');
+    written.medium.atten_handle = true;
+end
+fprintf(fid, '\n');
+
+% -------------------- source --------------------
+fprintf(fid, '%% -------------------- source --------------------\n');
+fprintf(fid, 'source.profile = ''%s'';\n', char(string(source.profile)));
+written.source.profile = true;
+
+fprintf(fid, 'source.a = %.15g;\n', source.a);             written.source.a = true;
+fprintf(fid, 'source.v0 = %.15g;\n', source.v0);           written.source.v0 = true;
+fprintf(fid, 'source.v_ratio = %.15g;\n', source.v_ratio); written.source.v_ratio = true;
+fprintf(fid, 'source.m = %d;\n', source.m_custom);         written.source.m_custom = true;
+% fprintf(fid, 'source.F = %.15g;\n', source.F);             written.source.F = true;
+
+fprintf(fid, 'source.f1 = %.15g;\n', source.f1);           written.source.f1 = true;
+fprintf(fid, 'source.fa = %.15g;\n', source.fa);           written.source.fa = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.fht --------------------
+fprintf(fid, '%% -------------------- calc.fht --------------------\n');
+cf = calc.fht;
+fprintf(fid, 'calc.fht.N_FHT = %.15g;\n', cf.N_FHT);        written.calc.fht.N_FHT = true;
+fprintf(fid, 'calc.fht.rho_max = %.15g;\n', cf.rho_max);    written.calc.fht.rho_max = true;
+fprintf(fid, 'calc.fht.Nh_scale = %.15g;\n', cf.Nh_scale);  written.calc.fht.Nh_scale = true;
+fprintf(fid, 'calc.fht.NH_scale = %.15g;\n', cf.NH_scale);  written.calc.fht.NH_scale = true;
+fprintf(fid, 'calc.fht.Nh_v_scale = %.15g;\n', cf.Nh_v_scale);
+written.calc.fht.Nh_v_scale = true;
+fprintf(fid, 'calc.fht.zu_max = %.15g;\n', cf.zu_max);      written.calc.fht.zu_max = true;
+fprintf(fid, 'calc.fht.za_max = %.15g;\n', cf.za_max);      written.calc.fht.za_max = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.dim --------------------
+fprintf(fid, '%% -------------------- calc.dim --------------------\n');
+fprintf(fid, 'calc.dim.dis_coe = %.15g;\n', calc.dim.dis_coe);
+written.calc.dim.dis_coe = true;
+
+fprintf(fid, 'calc.dim.src_discretization = ''%s'';\n', ...
+    char(string(calc.dim.src_discretization)));
+written.calc.dim.src_discretization = true;
+fprintf(fid, '\n');
+
+% % -------------------- calc.king --------------------
+% fprintf(fid, '%% -------------------- calc.king --------------------\n');
+% fprintf(fid, 'calc.king.gspec_method = ''%s'';\n', ...
+%     char(string(calc.king.gspec_method)));
+% written.calc.king.gspec_method = true;
+% 
+% fprintf(fid, 'calc.king.band_refine.enable = %s;\n', ...
+%     local_bool_str(calc.king.band_refine.enable));
+% written.calc.king.band_refine.enable = true;
+% fprintf(fid, '\n');
+
+% % -------------------- fig --------------------
+% fprintf(fid, '%% -------------------- fig --------------------\n');
+% fprintf(fid, 'fig.unwrap = %s;\n', local_bool_str(fig.unwrap));
+% fprintf(fid, '\n');
+% 
+% fprintf(fid, '\n');
+
+%% =========================================================
+fprintf(fid, '===== SECONDARY PARAMETERS (AUTO DUMP) =====\n\n');
+
+local_dump_struct(fid, medium, 'medium', written);
+local_dump_struct(fid, source, 'source', written);
+local_dump_struct(fid, calc,   'calc',   written);
+
+fprintf(fid, '\n===== END =====\n');
+end
+
+function local_dump_struct(fid, S, prefix, written)
+fn = fieldnames(S);
+for i = 1:numel(fn)
+    f = fn{i};
+
+    % skip already written fields
+    if isfield(written, prefix) && isfield(written.(prefix), f)
+        continue;
+    end
+
+    v = S.(f);
+    name = sprintf('%s.%s', prefix, f);
+
+    if isnumeric(v) && isscalar(v)
+        fprintf(fid, '%s = %.15g;\n', name, v);
+    elseif islogical(v) && isscalar(v)
+        fprintf(fid, '%s = %s;\n', name, local_bool_str(v));
+    elseif ischar(v) || isstring(v)
+        fprintf(fid, '%s = ''%s'';\n', name, char(string(v)));
+    elseif isstruct(v)
+        local_dump_struct(fid, v, name, struct());
+    elseif isa(v,'function_handle')
+        fprintf(fid, '%s = %s;\n', name, func2str(v));
+    end
 end
 end
