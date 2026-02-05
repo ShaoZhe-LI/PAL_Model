@@ -242,11 +242,11 @@ switch profile
             if ~has1 && has2; vrho_core_1 = vrho_core_2; end
             if has1 && ~has2; vrho_core_2 = vrho_core_1; end
         end
-        if isfield(source,'m_custom') && ~isempty(source.m_custom)
-            m_use = source.m_custom;
-        else
-            m_use = 0;
-        end
+            if isfield(source,'m_custom') && ~isempty(source.m_custom)
+        m_use = source.m_custom;
+    else
+        m_use = 0;
+    end
 
     otherwise
         error('make_source_velocity:UnknownProfile', ...
@@ -258,13 +258,26 @@ source.m_used = m_use;
 
 % =========================================================================
 % (2) Build LOCAL velocity handles (f1/f2) for later FHT/DIM sampling
+%   - Default: vn(x,y)=vs_rho(rho)*exp(j*m*phi)  (axisymmetric / vortex)
+%   - If provided: use arbitrary 2D handle custom_vn_xy_handle_1/2
 % =========================================================================
-vs_rho_1 = @(rho) local_vrho_masked(rho, a, vrho_core_1);     % rho -> v_n(rho) for f1
-vs_rho_2 = @(rho) local_vrho_masked(rho, a, vrho_core_2);     % rho -> v_n(rho) for f2
+vs_rho_1 = @(rho) local_vrho_masked(rho, a, vrho_core_1);
+vs_rho_2 = @(rho) local_vrho_masked(rho, a, vrho_core_2);
 
-% 2D velocity handles are needed for DIM sampling
-vn_xy_1  = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_1, source.m_used);   % (x,y) -> v_n(x,y) for f1
-vn_xy_2  = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_2, source.m_used);   % (x,y) -> v_n(x,y) for f2
+has_vn1 = isfield(source,'custom_vn_xy_handle_1') && isa(source.custom_vn_xy_handle_1,'function_handle');
+has_vn2 = isfield(source,'custom_vn_xy_handle_2') && isa(source.custom_vn_xy_handle_2,'function_handle');
+
+if has_vn1
+    vn_xy_1 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_1);
+else
+    vn_xy_1 = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_1, source.m_used);
+end
+
+if has_vn2
+    vn_xy_2 = @(X,Y) local_vn_xy_masked(X, Y, a, source.custom_vn_xy_handle_2);
+else
+    vn_xy_2 = @(X,Y) local_vn_xy_eval(X, Y, vs_rho_2, source.m_used);
+end
 
 % =========================================================================
 % (3) Build FHT parameter struct
@@ -661,9 +674,9 @@ for i = 1:Nr
     Nth0    = max(32, Nth_geo);   % base requirement
 
     if m_use == 0
-        Nth = Nth0;
+        Nth = Nth0;        
     else
-        Nth = ceil(Nth0 / abs(m_use)) * m_use;
+        Nth = ceil(Nth0 / abs(m_use)) * m_use;        
     end
 
     dth = 2*pi / Nth;
@@ -683,5 +696,14 @@ for i = 1:Nr
     Xs = [Xs; xs];
     Ys = [Ys; ys];
     dA_pts = [dA_pts; dA];
+end
+end
+
+function vxy = local_vn_xy_masked(X, Y, a, vn_handle)
+rho = hypot(X, Y);
+vxy = zeros(size(rho));
+mask = (rho <= a);
+if any(mask(:))
+    vxy(mask) = vn_handle(X(mask), Y(mask));
 end
 end

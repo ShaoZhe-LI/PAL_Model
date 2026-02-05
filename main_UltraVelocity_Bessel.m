@@ -26,7 +26,7 @@ clear; clc; close all;
 global SAVE_PNG SAVE_DIR
 SAVE_PNG = false;
 
-showbig = true;
+showbig = false;
 
 %% -------------------- profiler helpers --------------------
 get_mem_mb = @() local_get_mem_mb();
@@ -43,7 +43,7 @@ medium.atten_handle = [];
 %% -------------------- source (multi-ring superposition) --------------------
 n = 1;                      % n阶贝塞尔（同时也是角向阶数）
 source.profile = 'Custom';  % 用 Custom 自定义 v_rho(r)
-source.a = 0.1;
+source.a = 0.035;
 source.v0 = 0.172;
 source.v_ratio = 1;
 
@@ -51,21 +51,12 @@ source.v_ratio = 1;
 % （见文末“必要改动”说明）
 source.m_custom = n;        % vn(x,y)=v_rho(r)*exp(j*n*phi)
 
-source.f1 = 42e3;
+source.f1 = 97e3;
 source.fa = 2e3;
 source.f2 = source.f1 + source.fa;
 
-% --------- 多环参数：边界 r_edges + 复权重 w_ring ----------
-Q = 24;
-r_edges = linspace(0, source.a, Q+1);
-
-w_ring = zeros(Q,1);
-q0 = round(0.7*Q);
-w_ring(max(1,q0-1):min(Q,q0+1)) = 1;
-w_ring = w_ring / max(abs(w_ring)+eps);
-
-% --------- axicon 径向相位（可选） ----------
-theta_deg = 10;
+% n阶（角向因子仍由 exp(j*n*phi) 提供）
+theta_deg = 45;
 theta = deg2rad(theta_deg);
 
 k1r = 2*pi*source.f1/medium.c0;
@@ -73,8 +64,9 @@ k2r = 2*pi*source.f2/medium.c0;
 kr1 = k1r*sin(theta);
 kr2 = k2r*sin(theta);
 
-source.custom_vrho_handle_1 = @(rho) source.v0 .* local_vrho_rings(rho, r_edges, w_ring) .* exp(-1i*kr1.*rho);
-source.custom_vrho_handle_2 = @(rho) (source.v_ratio*source.v0) .* local_vrho_rings(rho, r_edges, w_ring) .* exp(-1i*kr2.*rho);
+% v_rho(r) = v0 * J_n(kr*r)   (r<=a)
+source.custom_vrho_handle_1 = @(rho) source.v0 .* besselj(n, kr1.*rho);
+source.custom_vrho_handle_2 = @(rho) (source.v_ratio*source.v0) .* besselj(n, kr2.*rho);
 
 %% -------------------- calc --------------------
 calc = struct();
@@ -118,7 +110,7 @@ else
 end
 
 %% -------------------- target plane (z≈1 m) --------------------
-z_target = 1.0;
+z_target = 0.05;
 
 % Get consistent z grid from make_source_velocity
 [~, fht_tmp] = make_source_velocity(source, medium, calc);
@@ -129,8 +121,8 @@ z_use = z_full(iz);
 calc.dim.z_use = z_use;
 
 %% -------------------- observation grid (xOy) --------------------
-r_boundary = 0.008;        % plot window
-dx_obs = 0.0002;           % observation spacing
+r_boundary = medium.c0 / source.f1 / 2;        % plot window
+dx_obs = medium.c0 / source.f1 / 2 / 64;           % observation spacing
 
 if showbig
 r_boundary = 0.12;        % plot window
@@ -220,7 +212,7 @@ end
 % ---- phase(vz)/pi ----
 subplot(1,2,2);
 surf(X, Y, zeros(size(X)), VZph, 'EdgeColor','none'); view(2);
-shading flat; colormap(hsv); clim(lim_ph);
+shading interp; colormap(hsv); clim(lim_ph);
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$\angle v_z/\pi$';
 set(clb,'Fontsize',18);
 
