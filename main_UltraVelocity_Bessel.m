@@ -25,7 +25,8 @@ clear; clc; close all;
 %% -------------------- save figures (GLOBAL control) --------------------
 global SAVE_PNG SAVE_DIR
 SAVE_PNG = false;
-SAVE_DIR = '';
+
+showbig = true;
 
 %% -------------------- profiler helpers --------------------
 get_mem_mb = @() local_get_mem_mb();
@@ -40,7 +41,7 @@ medium.use_absorp = false;
 medium.atten_handle = [];
 
 %% -------------------- source (multi-ring superposition) --------------------
-n = 2;                      % n阶贝塞尔（同时也是角向阶数）
+n = 1;                      % n阶贝塞尔（同时也是角向阶数）
 source.profile = 'Custom';  % 用 Custom 自定义 v_rho(r)
 source.a = 0.1;
 source.v0 = 0.172;
@@ -97,11 +98,30 @@ calc.dim.src_discretization = 'polar';   % 'cart' or 'polar'
 calc.dim.block_size     = 20000;
 calc.dim.src_block_size = 5000;
 
+%% -------------------- fig setup --------------------
+fig = {};
+
+%% -------------------- save setup --------------------
+if SAVE_PNG
+    tstr = datestr(datetime('now'), 'mmdd_HHMM');
+    a_str = sprintf('%.2fm', source.a);
+    m_str = sprintf('m=%d', source.m_custom);
+    SAVE_DIR = sprintf('%s_%s__%s_Bessel', a_str, m_str, tstr);
+
+    if ~exist(SAVE_DIR, 'dir')
+        mkdir(SAVE_DIR);
+    end
+
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig);
+else
+    SAVE_DIR = '';
+end
+
 %% -------------------- target plane (z≈1 m) --------------------
 z_target = 1.0;
 
 % Get consistent z grid from make_source_velocity
-[~, fht_tmp] = make_source_velocity(source, medium, calc); %#ok<ASGLU>
+[~, fht_tmp] = make_source_velocity(source, medium, calc);
 z_full = fht_tmp.z_ultra(:);
 [~, iz] = min(abs(z_full - z_target));
 z_use = z_full(iz);
@@ -111,6 +131,11 @@ calc.dim.z_use = z_use;
 %% -------------------- observation grid (xOy) --------------------
 r_boundary = 0.008;        % plot window
 dx_obs = 0.0002;           % observation spacing
+
+if showbig
+r_boundary = 0.12;        % plot window
+dx_obs = 0.004;           % observation spacing
+end
 
 x_obs = -r_boundary:dx_obs:r_boundary;
 y_obs = -r_boundary:dx_obs:r_boundary;
@@ -336,5 +361,134 @@ s = strrep(s, ' ', '_');
 bad = '<>:"/\|?*';
 for k = 1:numel(bad)
     s = strrep(s, bad(k), '_');
+end
+end
+
+function local_write_runinfo_txt(save_dir, medium, source, calc, fig)
+% Write run configuration into a text file under save_dir.
+% Primary section: explicitly listed user parameters (fixed order)
+% Secondary section: auto-dump of remaining fields
+
+fp = fullfile(save_dir, 'run_info.txt');
+fid = fopen(fp, 'w');
+if fid < 0
+    warning('Cannot create run_info.txt in %s', save_dir);
+    return;
+end
+cleanupObj = onCleanup(@() fclose(fid));
+
+written = struct();   % record written fields to avoid duplication
+
+fprintf(fid, '===== RUN INFO =====\n');
+fprintf(fid, 'Time: %s\n\n', datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS'));
+
+%% =========================================================
+fprintf(fid, '===== PRIMARY PARAMETERS (USER SPECIFIED) =====\n\n');
+
+% -------------------- medium --------------------
+fprintf(fid, '%% -------------------- medium --------------------\n');
+fprintf(fid, 'medium.c0 = %.15g;\n', medium.c0);           written.medium.c0 = true;
+fprintf(fid, 'medium.rho0 = %.15g;\n', medium.rho0);       written.medium.rho0 = true;
+fprintf(fid, 'medium.beta = %.15g;\n', medium.beta);       written.medium.beta = true;
+fprintf(fid, 'medium.pref = %.15g;\n', medium.pref);       written.medium.pref = true;
+% fprintf(fid, 'medium.use_absorp = %s;\n', local_bool_str(medium.use_absorp));
+written.medium.use_absorp = true;
+
+if isfield(medium,'atten_handle')
+    fprintf(fid, 'medium.atten_handle = @(f) AbsorpAttenCoef(f);\n');
+    written.medium.atten_handle = true;
+end
+fprintf(fid, '\n');
+
+% -------------------- source --------------------
+fprintf(fid, '%% -------------------- source --------------------\n');
+fprintf(fid, 'source.profile = ''%s'';\n', char(string(source.profile)));
+written.source.profile = true;
+
+fprintf(fid, 'source.a = %.15g;\n', source.a);             written.source.a = true;
+fprintf(fid, 'source.v0 = %.15g;\n', source.v0);           written.source.v0 = true;
+fprintf(fid, 'source.v_ratio = %.15g;\n', source.v_ratio); written.source.v_ratio = true;
+fprintf(fid, 'source.m = %d;\n', source.m_custom);         written.source.m_custom = true;
+% fprintf(fid, 'source.F = %.15g;\n', source.F);             written.source.F = true;
+
+fprintf(fid, 'source.f1 = %.15g;\n', source.f1);           written.source.f1 = true;
+fprintf(fid, 'source.fa = %.15g;\n', source.fa);           written.source.fa = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.fht --------------------
+fprintf(fid, '%% -------------------- calc.fht --------------------\n');
+cf = calc.fht;
+fprintf(fid, 'calc.fht.N_FHT = %.15g;\n', cf.N_FHT);        written.calc.fht.N_FHT = true;
+fprintf(fid, 'calc.fht.rho_max = %.15g;\n', cf.rho_max);    written.calc.fht.rho_max = true;
+fprintf(fid, 'calc.fht.Nh_scale = %.15g;\n', cf.Nh_scale);  written.calc.fht.Nh_scale = true;
+fprintf(fid, 'calc.fht.NH_scale = %.15g;\n', cf.NH_scale);  written.calc.fht.NH_scale = true;
+fprintf(fid, 'calc.fht.Nh_v_scale = %.15g;\n', cf.Nh_v_scale);
+written.calc.fht.Nh_v_scale = true;
+fprintf(fid, 'calc.fht.zu_max = %.15g;\n', cf.zu_max);      written.calc.fht.zu_max = true;
+fprintf(fid, 'calc.fht.za_max = %.15g;\n', cf.za_max);      written.calc.fht.za_max = true;
+fprintf(fid, '\n');
+
+% -------------------- calc.dim --------------------
+fprintf(fid, '%% -------------------- calc.dim --------------------\n');
+fprintf(fid, 'calc.dim.dis_coe = %.15g;\n', calc.dim.dis_coe);
+written.calc.dim.dis_coe = true;
+
+fprintf(fid, 'calc.dim.src_discretization = ''%s'';\n', ...
+    char(string(calc.dim.src_discretization)));
+written.calc.dim.src_discretization = true;
+fprintf(fid, '\n');
+
+% % -------------------- calc.king --------------------
+% fprintf(fid, '%% -------------------- calc.king --------------------\n');
+% fprintf(fid, 'calc.king.gspec_method = ''%s'';\n', ...
+%     char(string(calc.king.gspec_method)));
+% written.calc.king.gspec_method = true;
+% 
+% fprintf(fid, 'calc.king.band_refine.enable = %s;\n', ...
+%     local_bool_str(calc.king.band_refine.enable));
+% written.calc.king.band_refine.enable = true;
+% fprintf(fid, '\n');
+
+% % -------------------- fig --------------------
+% fprintf(fid, '%% -------------------- fig --------------------\n');
+% fprintf(fid, 'fig.unwrap = %s;\n', local_bool_str(fig.unwrap));
+% fprintf(fid, '\n');
+% 
+% fprintf(fid, '\n');
+
+%% =========================================================
+fprintf(fid, '===== SECONDARY PARAMETERS (AUTO DUMP) =====\n\n');
+
+local_dump_struct(fid, medium, 'medium', written);
+local_dump_struct(fid, source, 'source', written);
+local_dump_struct(fid, calc,   'calc',   written);
+
+fprintf(fid, '\n===== END =====\n');
+end
+
+function local_dump_struct(fid, S, prefix, written)
+fn = fieldnames(S);
+for i = 1:numel(fn)
+    f = fn{i};
+
+    % skip already written fields
+    if isfield(written, prefix) && isfield(written.(prefix), f)
+        continue;
+    end
+
+    v = S.(f);
+    name = sprintf('%s.%s', prefix, f);
+
+    if isnumeric(v) && isscalar(v)
+        fprintf(fid, '%s = %.15g;\n', name, v);
+    elseif islogical(v) && isscalar(v)
+        fprintf(fid, '%s = %s;\n', name, local_bool_str(v));
+    elseif ischar(v) || isstring(v)
+        fprintf(fid, '%s = ''%s'';\n', name, char(string(v)));
+    elseif isstruct(v)
+        local_dump_struct(fid, v, name, struct());
+    elseif isa(v,'function_handle')
+        fprintf(fid, '%s = %s;\n', name, func2str(v));
+    end
 end
 end
