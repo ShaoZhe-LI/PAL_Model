@@ -20,7 +20,7 @@ clear; clc; close all;
 
 %% -------------------- save switches --------------------
 global SAVE_PNG SAVE_MAT SAVE_DIR
-SAVE_PNG = true;    % save figures
+SAVE_PNG = false;    % save figures
 SAVE_MAT = false;    % save .mat
 
 %% -------------------- profiler helpers --------------------
@@ -72,7 +72,7 @@ source.a = r0 + M * P;
 handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
-l = 4;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
+l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
 
 % Define vn(x,y)
 vn_handle = @(X,Y) local_spiral_binary_grating_vn(X,Y, ...
