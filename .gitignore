@@ -10,12 +10,14 @@
 *.bmp
 *.pdf
 *.docx
+*.fig
 # !broadband/fig/*.pdf
 
 # 禁止加入数据保存用的txt文件
 *.txt
 *.ppt
 *.pptx
+*.mat
 
 # 允许加入特定的png图片
-!fig/
+# !fig/

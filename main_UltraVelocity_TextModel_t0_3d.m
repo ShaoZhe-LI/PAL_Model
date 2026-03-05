@@ -29,8 +29,8 @@ clear; clc; close all;
 
 %% -------------------- save switches --------------------
 global SAVE_PNG SAVE_MAT SAVE_DIR
-SAVE_PNG = false;    % save figures
-SAVE_MAT = false;    % save .mat
+SAVE_PNG = true;        % save figures
+SAVE_MAT = SAVE_PNG;    % save .mat
 
 %% -------------------- profiler helpers --------------------
 get_mem_mb = @() local_get_mem_mb();
@@ -118,7 +118,7 @@ if (SAVE_PNG || SAVE_MAT)
     f_str = sprintf('f1=%.0fk', source.f1/1e3);
     l_str = sprintf('l=%d', l);
     a_str = sprintf('a=%.1fmm', source.a*1e3);
-    SAVE_DIR = sprintf('%s__%s__%s__%s', f_str, a_str, l_str, tstr);
+    SAVE_DIR = sprintf('LiteratureReview__%s__%s__%s__%s', f_str, a_str, l_str, tstr);
 
     if ~exist(SAVE_DIR, 'dir'), mkdir(SAVE_DIR); end
     local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig);
@@ -144,7 +144,7 @@ calc.dim.z_use = z_use;
 % Observation plane range (paper-like: scale ~ lambda)
 %% ============================================================
 half_width = 0.5 * lambda1;
-r_boundary = 1.2 * half_width;
+r_boundary = 2 * half_width;
 dx_obs = half_width / 32;
 
 x_obs = -r_boundary:dx_obs:r_boundary;
@@ -372,6 +372,7 @@ if do_fig5_like
     view(35,25);
 
     local_save_fig_png(gcf, sprintf('DIM_Fig5_bivector3D_spiral_z%.4f_l%d', z_use, l));
+    local_save_fig_fig(gcf, sprintf('DIM_Fig5_bivector3D_spiral_z%.4f_l%d', z_use, l));
 end
 
 %% -------------------- plot settings --------------------
@@ -565,6 +566,27 @@ try
     exportgraphics(fig_handle, fp, 'Resolution', 300);
 catch
     print(fig_handle, fp, '-dpng', '-r300');
+end
+end
+
+
+function local_save_fig_fig(fig_handle, base_name)
+global SAVE_PNG SAVE_DIR
+if isempty(SAVE_PNG) || ~SAVE_PNG, return; end
+if isempty(SAVE_DIR) || ~exist(SAVE_DIR,'dir'), return; end
+
+fname = local_sanitize_filename(base_name);
+fp = fullfile(SAVE_DIR, [fname, '.fig']);
+set(fig_handle, 'Color', 'w');
+try
+    savefig(fig_handle, fp);                % <-- 用 savefig 保存 .fig
+catch
+    % 兼容旧版本 MATLAB
+    try
+        saveas(fig_handle, fp);
+    catch
+        warning('Failed to save FIG: %s', fp);
+    end
 end
 end
 
