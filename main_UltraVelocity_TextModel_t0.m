@@ -224,6 +224,8 @@ if do_fig5_like
     Smag = abs(S);
     phS  = angle(S);
 
+    phi_sign = 0;   % 用瞬时速度 u(t0)=Re{v*exp(-j*phi_sign)} 定正负；phi_sign=0 等价 t0=0
+
     % ---- detection options (tune if needed) ----
     copt = struct();
     copt.max_candidates = 25;     % test up to K smallest |S|
@@ -382,12 +384,14 @@ if do_fig5_like
     end
 
     % ---- major-axis director on contours ----
-    E1 = local_major_axis_directors_on_contour(C1, Fvx, Fvy, Fvz); % Ns x 3
-    E2 = local_major_axis_directors_on_contour(C2, Fvx, Fvy, Fvz);
+    E1 = local_major_axis_directors_on_contour(C1, Fvx, Fvy, Fvz, phi_sign);
+    E2 = local_major_axis_directors_on_contour(C2, Fvx, Fvy, Fvz, phi_sign);
 
     % project to xy and enforce vector continuity for display + mark discontinuity index
-    [e1_xy, flip1] = local_director_to_vector_xy_continuous(E1(:,1:2));
-    [e2_xy, flip2] = local_director_to_vector_xy_continuous(E2(:,1:2)); %#ok<NASGU>
+    % 已在计算 E1/E2 时完成“物理定向”(signed)，这里只需取 xy 并归一化
+    e1_xy = local_norm_rows(E1(:,1:2));
+    e2_xy = local_norm_rows(E2(:,1:2));
+    flip1 = 1;  % 物理定向不再需要“切口”概念；若仍想画黄条可另行定义
 
     % ---- plot Fig5-like (bi-vectors) ----
     col_pos = [0 0.45 1.00];    % + end color
@@ -408,7 +412,7 @@ if do_fig5_like
         plot(p1(1), p1(2), 'k.', 'MarkerSize', 18);
     end
     % highlight discontinuity (paper-like cue) in yellow
-    local_highlight_segment(C1, flip1, [1 1 0], 0.55*dxy);
+    % local_highlight_segment(C1, flip1, [1 1 0], 0.55*dxy);
 
     xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
     set(gca,'TickLabelInterpreter','latex','LineWidth',1.2);
@@ -768,7 +772,7 @@ tt = linspace(0,2*pi,Nsamp+1);   % include endpoint 2*pi
 C  = [center_xy(1)+radius*cos(tt(:)), center_xy(2)+radius*sin(tt(:))];
 end
 
-function E = local_major_axis_directors_on_contour(C, Fvx, Fvy, Fvz)
+function E = local_major_axis_directors_on_contour(C, Fvx, Fvy, Fvz, phi_sign)
 % E: Nsamp x 3 directors (unit vectors, sign-free)
 % If C is explicitly closed (last==first), ignore the last point for direction computation.
 C_use = C;
@@ -782,7 +786,7 @@ for i = 1:Ns
     x = C_use(i,1); y = C_use(i,2);
     vx = Fvx(x,y); vy = Fvy(x,y); vz = Fvz(x,y);
     if any(~isfinite([vx,vy,vz])), continue; end
-    E(i,:) = local_major_axis_director([vx;vy;vz]).';
+    E(i,:) = local_major_axis_vector_signed([vx;vy;vz], phi_sign).';
 end
 end
 
@@ -797,6 +801,25 @@ M = a*a.' + b*b.';           % symmetric 3x3
 e = V(:,id);
 n = norm(e);
 if n > 0, e = e/n; end
+end
+
+function e = local_major_axis_vector_signed(v, phi_sign)
+% v: 3x1 complex velocity vector
+% phi_sign: reference phase (rad). u0 = Re{v*exp(-j*phi_sign)} is instantaneous velocity at that phase.
+% Output e is the major-axis vector with a FIXED SIGN (dot(e,u0)>=0 if u0 not near zero).
+
+% 1) major-axis director (sign-free)
+e = local_major_axis_director(v);
+
+% 2) instantaneous velocity direction at chosen phase
+u0 = real(v(:) * exp(-1j*phi_sign));  % = a*cos(phi)+b*sin(phi)
+
+% 3) fix sign: align with u0 (if u0 is not too small)
+if norm(u0) > 1e-12
+    if dot(e, u0) < 0
+        e = -e;
+    end
+end
 end
 
 function [e_xy, flip_idx] = local_director_to_vector_xy_continuous(E_xy)
@@ -983,4 +1006,9 @@ if isempty(is_init) || isempty(Fph)
 end
 
 ph = Fph(xq, yq);
+end
+
+function A = local_norm_rows(A)
+nn = sqrt(sum(A.^2,2));
+A = A ./ max(nn, eps);
 end
