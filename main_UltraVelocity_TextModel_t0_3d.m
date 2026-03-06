@@ -83,6 +83,7 @@ l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
 r_boundary_coef = 1.8;  % 2D图像范围
 r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
+qk_vec = [1:10];
 
 extra = struct();
 extra.l = l;
@@ -96,6 +97,13 @@ vn_handle = @(X,Y) local_spiral_binary_grating_vn(X,Y, ...
 
 source.custom_vn_xy_handle_1 = vn_handle;
 source.custom_vn_xy_handle_2 = @(X,Y) source.v_ratio * vn_handle(X,Y);
+
+%% -------------------- detection options --------------------
+copt = struct();
+copt.max_candidates = 80;
+copt.smag_rel_th    = 0.2;
+copt.min_sep_pix    = 2;
+copt.ring_radius    = 2;
 
 %% -------------------- calc --------------------
 calc = struct();
@@ -130,7 +138,7 @@ if (SAVE_PNG || SAVE_MAT)
     SAVE_DIR = sprintf('LiteratureReview__%s__%s__%s__%s', f_str, a_str, l_str, tstr);
 
     if ~exist(SAVE_DIR, 'dir'), mkdir(SAVE_DIR); end
-    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig, extra);
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig, extra, copt);
 else
     SAVE_DIR = '';
 end
@@ -234,13 +242,6 @@ if do_fig5_like
 
     phi_sign = 0;   % u(t0)=Re{v*exp(-j*phi_sign)} to set sign
 
-    % ---- detection options ----
-    copt = struct();
-    copt.max_candidates = 25;
-    copt.smag_rel_th    = 0.1;
-    copt.min_sep_pix    = 4;
-    copt.ring_radius    = 2;
-
     Cpts = local_find_Cpoints_from_S(X, Y, Smag, phS, copt);  % [x,y,q,|S|]
 
     fprintf('Candidates (x,y,charge,|S|): %d\n', size(Cpts,1));
@@ -288,7 +289,7 @@ if do_fig5_like
             qk = Cnz_in(k,3);
 
             % keep common low orders
-            if ~ismember(abs(qk), [1 2 4])
+            if ~ismember(abs(qk), qk_vec)
                 continue;
             end
 
@@ -608,7 +609,7 @@ for k = 1:numel(bad)
 end
 end
 
-function local_write_runinfo_txt(save_dir, medium, source, calc, fig, extra)
+function local_write_runinfo_txt(save_dir, medium, source, calc, fig, extra, copt)
 fp = fullfile(save_dir, 'run_info.txt');
 fid = fopen(fp, 'w');
 if fid < 0
@@ -651,6 +652,12 @@ fprintf(fid, 'l=%d;\n', extra.l);
 fprintf(fid, 'r_boundary_coef=%.15g;\n', extra.r_boundary_coef);
 fprintf(fid, 'r_small_k=%d;  %% r_small = r_small_k * dxy\n', extra.r_small_k);
 fprintf(fid, 'r_large_k=%d;  %% r_large = r_large_k * dxy\n', extra.r_large_k);
+
+fprintf(fid, '\n%% copt (for finding q)\n');
+fprintf(fid, 'max_candidates=%d;\n', copt.max_candidates);
+fprintf(fid, 'smag_rel_th=%.15g;\n', copt.smag_rel_th);
+fprintf(fid, 'min_sep_pix=%.15g;\n', copt.min_sep_pix);
+fprintf(fid, 'ring_radius=%.15g;\n', copt.ring_radius);
 
 fprintf(fid, '\n===== END =====\n');
 end
