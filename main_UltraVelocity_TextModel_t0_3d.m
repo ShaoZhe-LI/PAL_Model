@@ -18,7 +18,7 @@
 %   - plot 3D bi-vectors (double-ended arrows) using quiver3 on the plane z=z_use
 %
 % Colormap:
-%   - magnitude: hsv + shading interp
+%   - magnitude: vik + shading interp
 %   - phase:     hsv + shading flat
 % ============================================================
 
@@ -62,6 +62,12 @@ source.v_ratio = 1;
 % IMPORTANT: for arbitrary 2D vn(x,y), set m_custom = 0
 source.m_custom = 0;
 
+% source mode:
+%   'spiral_abnormal' : 原始写法，径向等宽、法向不等宽
+%   'spiral_normal'   : 近似按螺旋局部法向等宽
+%   'triangle_normal' : 三角形
+source.mode = 'triangle_normal';
+
 % wavelength at f1
 lambda1 = medium.c0 / source.f1;
 
@@ -80,10 +86,28 @@ handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
 l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
-r_boundary_coef = 1.8;  % 2D图像范围
+r_boundary_coef = 1.2;  % 2D图像范围
 r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
 qk_vec = [1:10];
+
+if strcmp(source.mode,'triangle_normal')
+    source.f1   = 70e3;
+    source.fa   = 2e3;                 % 这个文中没给，是你PAL框架自己的，可保留
+    source.f2   = source.f1 + source.fa;
+
+    theta0 = pi/4;
+    lambda1 = medium.c0 / source.f1;
+    P  = sqrt(2) * lambda1;
+    dP = 0.45 * P;
+
+    M  = 8;
+    r0 = 22e-3;
+
+    source.a = 1.1*(r0 + 2*M*P + dP);  % 先这样取；若想更保守可再加一点margin
+    handed = -1;                       % clockwise
+    l = -1;                            % 对应 (N,l)=(3,-1)
+end
 
 extra = struct();
 extra.l = l;
@@ -93,17 +117,67 @@ extra.r_large_k = r_large_k;
 
 % Define vn(x,y)
 vn_handle = @(X,Y) local_spiral_binary_grating_vn(X,Y, ...
-    source.v0, source.a, r0, P, dP, M, handed, l);
+    source.v0, source.a, r0, P, dP, M, handed, l, source.mode);
 
 source.custom_vn_xy_handle_1 = vn_handle;
 source.custom_vn_xy_handle_2 = @(X,Y) source.v_ratio * vn_handle(X,Y);
 
 %% -------------------- detection options --------------------
 copt = struct();
+
+% 最多保留多少个C点候选（防止漏检，l大时适当加大），25
 copt.max_candidates = 80;
+% |S|阈值系数：|S| < 0.2*median(|S|) 才算候选（越大候选越多），0.1
 copt.smag_rel_th    = 0.2;
+% 去重半径(像素)：两候选点距离<=(2)这个数量的像素视为重复，只保留一个（越小越容易分辨近邻点）
 copt.min_sep_pix    = 2;
-copt.ring_radius    = 2;
+% 绕转数计算环半径(像素)：越小越“局部”更易分裂点，但抗噪更弱, 1
+copt.ring_radius    = 1;
+
+%% -------------------- preview source pattern --------------------
+% draw source vn(x,y) pattern and save if needed
+src_plot_N = 801;
+src_margin = 1.15;   % 或 1.2 / 1.3
+
+x_src = linspace(-src_margin*source.a, src_margin*source.a, src_plot_N);
+y_src = linspace(-src_margin*source.a, src_margin*source.a, src_plot_N);
+[Xs, Ys] = meshgrid(x_src, y_src);
+
+Vsrc = vn_handle(Xs, Ys);
+mask_disk = hypot(Xs, Ys) <= source.a;
+Vsrc(~mask_disk) = NaN;
+
+Vsrc = vn_handle(Xs, Ys);
+mask_disk = hypot(Xs, Ys) <= source.a;
+Vsrc(~mask_disk) = NaN;
+
+fig_source = figure('Color','w', 'Position',[120 120 760 680], ...
+    'Name', sprintf('Source pattern: %s', char(string(source.mode))));
+ax = axes; %#ok<NASGU>
+surf(Xs, Ys, zeros(size(Xs)), Vsrc, 'EdgeColor','none');
+view(2);
+shading flat;
+axis equal;
+xlim(src_margin*[-source.a, source.a]);
+ylim(src_margin*[-source.a, source.a]);
+xlabel('$x$ (m)','Interpreter','latex');
+ylabel('$y$ (m)','Interpreter','latex');
+title(sprintf('Source pattern: %s', strrep(char(string(source.mode)),'_','\_')), ...
+    'Interpreter','none');
+
+colormap(parula);
+clb = colorbar;
+clb.Title.String = '$v_n$';
+clb.Title.Interpreter = 'latex';
+
+set(gca,'LineWidth',1.5,'TickLabelInterpreter','latex');
+fontsize(gca,20,'points');
+
+% show aperture boundary
+hold on;
+tt = linspace(0,2*pi,600);
+plot(source.a*cos(tt), source.a*sin(tt), 'k-', 'LineWidth', 1.0);
+hold off;
 
 %% -------------------- calc --------------------
 calc = struct();
@@ -404,9 +478,9 @@ figure('Name', sprintf('|v| & angle(vz) @ z=%.3f m', z_use), ...
 set(gcf,'Renderer','opengl');
 
 % ---- |v| ----
-subplot(1,2,1);
+ax1 = subplot(1,2,1);
 surf(X, Y, zeros(size(X)), Vmag, 'EdgeColor','none'); view(2);
-shading interp; colormap(hsv);
+shading interp; colormap(ax1, MyColor('vik'));
 if lim_v(2) > lim_v(1), clim(lim_v); end
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$|v|$';
 set(clb,'Fontsize',18);
@@ -432,9 +506,9 @@ if do_quiver
 end
 
 % ---- angle(vz)/pi ----
-subplot(1,2,2);
+ax2 = subplot(1,2,2);
 surf(X, Y, zeros(size(X)), angle(vZ)/pi, 'EdgeColor','none'); view(2);
-shading flat; colormap(hsv); clim(lim_ph);
+shading flat; colormap(ax2, hsv); clim(lim_ph);
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$\angle v_z/\pi$';
 set(clb,'Fontsize',18);
 
@@ -464,6 +538,8 @@ local_save_fig_png(gcf, sprintf('DIM_vz_magphase_spiral_z%.4f_l%d', z_use, l));
 local_plot_mag_phase_cart(X, Y, S, 's=v\cdot v', z_use, source.f2, lim_s, lim_ph, true);
 local_save_fig_png(gcf, sprintf('DIM_s_vdotv_magphase_spiral_z%.4f_l%d', z_use, l));
 
+local_save_fig_png(fig_source, sprintf('SourcePattern_%s', char(string(source.mode))));
+
 %% ==================== local functions ====================
 
 function local_plot_mag_phase_cart(X, Y, V, nameStr, z_use, f_hz, lim_mag, lim_ph, isS)
@@ -474,9 +550,9 @@ figure('Color','w', 'Position',[100 100 1400 650], ...
 set(gcf,'Renderer','opengl');
 
 % ----- magnitude -----
-subplot(1,2,1);
+ax1 = subplot(1,2,1);
 surf(X, Y, zeros(size(X)), abs(V), 'EdgeColor','none'); view(2);
-shading interp; colormap(hsv);
+shading interp; colormap(ax1, MyColor('vik'));
 if all(isfinite(lim_mag)) && lim_mag(2) > lim_mag(1), clim(lim_mag); end
 clb = colorbar;
 clb.Title.Interpreter = 'latex';
@@ -494,9 +570,9 @@ xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex')
 title(sprintf('Magnitude @ $z=%.3f$ m', z_use), 'Interpreter','latex','Fontsize',18);
 
 % ----- phase/pi -----
-subplot(1,2,2);
+ax2 = subplot(1,2,2);
 surf(X, Y, zeros(size(X)), angle(V)/pi, 'EdgeColor','none'); view(2);
-shading flat; colormap(hsv); clim(lim_ph);
+shading flat; colormap(ax2, hsv); clim(lim_ph);
 clb = colorbar;
 clb.Title.Interpreter = 'latex';
 if ~isS
@@ -516,27 +592,399 @@ sgtitle(sprintf('DIM, $f=%.1f$ kHz, $z=%.3f$ m', f_hz/1e3, z_use), ...
     'Interpreter','latex','Fontsize',18);
 end
 
-function vn = local_spiral_binary_grating_vn(X,Y,v0,a,r0,P,dP,M,handed,l)
+function vn = local_spiral_binary_grating_vn(X,Y,v0,a,r0,P,dP,M,handed,l,mode)
+%LOCAL_SPIRAL_BINARY_GRATING_VN
+% Spiral binary source with two modes:
+%
+%   mode = 'spiral_abnormal'
+%       EXACTLY the same as the user's original implementation.
+%
+%   mode = 'spiral_normal'
+%       True constant-width rectangular strip wound into an Archimedean spiral.
+%       The +v0 region is defined by the Euclidean nearest distance to the
+%       spiral centerline being <= dP/2.
+%
+% Inputs
+%   X,Y    : Cartesian grid
+%   v0     : velocity magnitude
+%   a      : aperture radius
+%   r0     : inner radius
+%   P      : pitch parameter
+%   dP     : strip width
+%   M      : number of turns/pitches
+%   handed : +1 / -1
+%   l      : geometric factor used in current spiral definition
+%   mode   : 'spiral_abnormal' or 'spiral_normal'
+%
+% Output
+%   vn     : binary-valued source velocity (+/-v0 inside active region)
+
+if nargin < 10 || isempty(mode)
+    mode = 'spiral_abnormal';
+end
+mode = lower(string(mode));
+
 rho = hypot(X,Y);
 phi = atan2(Y,X);
 
 vn = zeros(size(rho));
 
+% outer radial limit
 r1 = r0 + M*P;
+
+% active aperture mask
 mask_ap = (rho <= a) & (rho >= r0) & (rho <= r1);
-if ~any(mask_ap(:)), return; end
+if ~any(mask_ap(:))
+    return;
+end
 
 b = P/(2*pi);
-phi_eff = l * phi(mask_ap);
 
-u = rho(mask_ap) - r0 - b*(handed*phi_eff);
-t = mod(u, P);
+switch mode
+    case "spiral_abnormal"
+        % ============================================================
+        % EXACTLY your original version
+        % ============================================================
+        rho_m = rho(mask_ap);
+        phi_m = phi(mask_ap);
 
-on = (t < dP);
-g = ones(size(t));
-g(~on) = -1;
+        phi_eff = l * phi_m;
 
-vn(mask_ap) = v0 * g;
+        u = rho_m - r0 - b*(handed*phi_eff);
+        t = mod(u, P);
+
+        on = (t < dP);
+        g = ones(size(t));
+        g(~on) = -1;
+
+        vn(mask_ap) = v0 * g;
+
+    case "spiral_normal"
+        % ============================================================
+        % True constant-width strip wound into a spiral:
+        % define +v0 by nearest Euclidean distance to spiral centerline.
+        %
+        % Spiral centerline family:
+        %   rho = r0 + b * psi
+        % with psi = handed*l*phi + 2*pi*m
+        %
+        % We discretize the spiral centerline densely, then compute the
+        % nearest Euclidean distance from each grid point to the centerline.
+        % ============================================================
+
+        % ---- active points ----
+        xq = X(mask_ap);
+        yq = Y(mask_ap);
+
+        % ---- build dense spiral centerline samples ----
+        % total effective angle span
+        psi_max = 2*pi*M;
+
+        % sampling step along angle; smaller -> smoother strip boundary
+        % use enough samples relative to strip width and pitch
+        npsi = max(4000, ceil(psi_max / (2*pi) * 1200));
+        psi = linspace(0, psi_max, npsi);
+
+        % centerline in polar
+        rho_c = r0 + b*psi;
+
+        % convert to actual azimuth
+        % psi = handed*l*theta  -> theta = psi/(handed*l)
+        theta_c = psi / (handed * l);
+
+        xc = rho_c .* cos(theta_c);
+        yc = rho_c .* sin(theta_c);
+
+        % keep only points inside aperture disk just in case
+        keep = (xc.^2 + yc.^2) <= a^2;
+        xc = xc(keep);
+        yc = yc(keep);
+
+        % ---- nearest Euclidean distance to centerline ----
+        % For memory safety, do block processing.
+        dn_min2 = inf(size(xq));
+
+        blk = 4000;   % query-point block size
+        for ib = 1:blk:numel(xq)
+            ie = min(ib + blk - 1, numel(xq));
+
+            Xb = xq(ib:ie);
+            Yb = yq(ib:ie);
+
+            % distance to all sampled centerline points
+            % result size: [num_block, num_centerline_samples]
+            dx = Xb(:) - xc(:).';
+            dy = Yb(:) - yc(:).';
+            d2 = dx.^2 + dy.^2;
+
+            dn_min2(ib:ie) = min(d2, [], 2);
+        end
+
+        dn_min = sqrt(dn_min2);
+
+        % ---- constant strip width ----
+        on = dn_min <= (dP/2);
+
+        % ---- constant strip width ----
+        on = dn_min <= (dP/2);
+
+        val = -v0 * ones(size(xq));
+        val(on) = +v0;
+
+        vn(mask_ap) = val;
+
+        case "triangle_normal"
+        % ============================================================
+        % Triangular spiral source:
+        %   outside outer boundary : 0
+        %   spiral strips          : +v0
+        %   middle background      : -v0
+        %   inside inner boundary  : 0
+        %
+        % Inner/outer triangular boundaries are obtained by offsetting
+        % the actual spiral centerline segments by dP/2.
+        % ============================================================
+
+        % ---- initialize all to zero ----
+        vn = zeros(size(X));
+
+        % ---- generate triangular spiral centerline ----
+        pts = local_make_triangle_spiral_centerline(r0, M, P, handed);
+        if size(pts,1) < 6
+            return;
+        end
+
+        segP0 = pts(1:end-1,:);
+        segP1 = pts(2:end,:);
+
+        % ------------------------------------------------------------
+        % Outer boundary triangle:
+        % use the first 3 segments (outermost turn),
+        % offset them AWAY from the source interior by dP/2
+        % ------------------------------------------------------------
+        seg0_outer = segP0(1:3,:);
+        seg1_outer = segP1(1:3,:);
+
+        ref_outer = mean(pts(1:3,:), 1);   % a point roughly near the source interior
+        outer_poly = local_triangle_from_three_segments(seg0_outer, seg1_outer, -dP/2, ref_outer);
+
+        % ------------------------------------------------------------
+        % Inner boundary triangle:
+        % use the last 3 segments (innermost turn),
+        % offset them TOWARD the void interior by dP/2
+        % ------------------------------------------------------------
+        seg0_inner = segP0(end-2:end,:);
+        seg1_inner = segP1(end-2:end,:);
+
+        ref_inner = mean(pts(end-3:end,:), 1);   % a point roughly inside the inner void
+        inner_poly = local_triangle_from_three_segments(seg0_inner, seg1_inner, +dP/2, ref_inner);
+
+        % ---- masks on full grid ----
+        [in_outer, on_outer] = inpolygon(X, Y, outer_poly(:,1), outer_poly(:,2));
+        inside_outer = in_outer | on_outer;
+
+        [in_inner, on_inner_poly] = inpolygon(X, Y, inner_poly(:,1), inner_poly(:,2));
+        inside_inner = in_inner | on_inner_poly;
+
+        % ---- active region only inside outer boundary and aperture ----
+        mask_ap = (rho <= a) & inside_outer;
+        if ~any(mask_ap(:))
+            return;
+        end
+
+        xq = X(mask_ap);
+        yq = Y(mask_ap);
+
+        inside_inner_q = inside_inner(mask_ap);
+
+        % ---- point-to-segment distance to whole spiral ----
+        d2_min = inf(size(xq));
+
+        nSeg  = size(segP0,1);
+        blk_q = 2000;
+        blk_s = 100;
+
+        for iq = 1:blk_q:numel(xq)
+            jq = min(iq + blk_q - 1, numel(xq));
+
+            Xb = xq(iq:jq);
+            Yb = yq(iq:jq);
+
+            d2_blk = inf(numel(Xb),1);
+
+            for is = 1:blk_s:nSeg
+                js = min(is + blk_s - 1, nSeg);
+
+                P0 = segP0(is:js,:);
+                P1 = segP1(is:js,:);
+
+                d2_now = local_point_to_segments_min_d2(Xb, Yb, P0, P1);
+                d2_blk = min(d2_blk, d2_now);
+            end
+
+            d2_min(iq:jq) = d2_blk;
+        end
+
+        % ---- strip region ----
+        on_strip = sqrt(d2_min) <= (dP/2);
+
+        % ---- assign values ----
+        % default inside outer boundary = -v0
+        % spiral strips = +v0
+        % inner void = 0
+        val = -v0 * ones(size(xq));
+        val(on_strip) = +v0;
+        val(inside_inner_q) = 0;
+
+        vn(mask_ap) = val;
+
+    otherwise
+        error('Unknown source.mode: %s', char(mode));
+end
+end
+
+function poly = local_triangle_from_three_segments(segP0, segP1, offset_dist, ref_point)
+%LOCAL_TRIANGLE_FROM_THREE_SEGMENTS
+% Build a triangular polygon from 3 line segments by offsetting each line.
+%
+% Inputs
+%   segP0, segP1 : 3x2, segment start/end points
+%   offset_dist  : signed offset distance
+%                  +d -> toward ref_point side
+%                  -d -> away from ref_point side
+%   ref_point    : 1x2, a point that defines the interior side of each line
+%
+% Output
+%   poly         : 3x2 triangle vertices
+
+nvec = zeros(3,2);
+cval = zeros(3,1);
+
+for k = 1:3
+    p0 = segP0(k,:);
+    p1 = segP1(k,:);
+
+    e = p1 - p0;
+    Le = norm(e);
+    if Le < eps
+        error('Degenerate segment encountered in local_triangle_from_three_segments.');
+    end
+
+    % one unit normal
+    n = [-e(2), e(1)] / Le;
+
+    % force normal to point toward ref_point
+    if dot(n, ref_point - p0) < 0
+        n = -n;
+    end
+
+    nvec(k,:) = n;
+    cval(k)   = dot(n, p0) + offset_dist;
+end
+
+poly = zeros(3,2);
+for k = 1:3
+    k2 = mod(k,3) + 1;
+    poly(k,:) = local_intersect_two_lines(nvec(k,:), cval(k), nvec(k2,:), cval(k2));
+end
+end
+
+function p = local_intersect_two_lines(n1, c1, n2, c2)
+%LOCAL_INTERSECT_TWO_LINES
+% Solve:
+%   n1 * x = c1
+%   n2 * x = c2
+%
+% n1, n2 : 1x2
+% c1, c2 : scalars
+
+A = [n1(:).'; n2(:).'];
+b = [c1; c2];
+
+if abs(det(A)) < 1e-12
+    error('Lines are nearly parallel in local_intersect_two_lines.');
+end
+
+p = (A \ b).';
+end
+
+function pts = local_make_triangle_spiral_centerline(r0, M, P, handed)
+
+if nargin < 4 || isempty(handed)
+    handed = -1;
+end
+
+r_outer = r0 + 2*M*P;
+L0 = sqrt(3)*r_outer;
+dL = 2*sqrt(3)*P/3;
+Nseg = 3*M;
+
+if handed < 0
+    angles_deg = [0, 120, -120];
+else
+    angles_deg = [0, -120, 120];
+end
+
+pts = zeros(Nseg+1, 2);
+pts(1,:) = [0, 0];
+
+nkeep = 1;
+for k = 1:Nseg
+    Lk = L0 - (k-1)*dL;
+    if Lk <= 0
+        break;
+    end
+
+    ang = angles_deg(mod(k-1,3)+1);
+    dir = [cosd(ang), sind(ang)];
+    pts(k+1,:) = pts(k,:) + Lk * dir;
+    nkeep = k+1;
+end
+
+pts = pts(1:nkeep,:);
+
+% use outermost triangle centroid for centering
+if size(pts,1) >= 3
+    pc = mean(pts(1:3,:), 1);
+    pts = pts - pc;
+end
+end
+
+function d2_min = local_point_to_segments_min_d2(Xq, Yq, P0, P1)
+%LOCAL_POINT_TO_SEGMENTS_MIN_D2
+% Minimum squared distance from query points to a batch of segments.
+%
+% Inputs
+%   Xq, Yq : Nq x 1
+%   P0, P1 : Ns x 2
+%
+% Output
+%   d2_min : Nq x 1
+
+Xq = Xq(:);
+Yq = Yq(:);
+
+x0 = P0(:,1).';
+y0 = P0(:,2).';
+x1 = P1(:,1).';
+y1 = P1(:,2).';
+
+vx = x1 - x0;
+vy = y1 - y0;
+vv = vx.^2 + vy.^2;
+vv(vv < eps) = eps;
+
+wx = Xq - x0;
+wy = Yq - y0;
+
+t = (wx.*vx + wy.*vy) ./ vv;
+t = max(0, min(1, t));
+
+xp = x0 + t.*vx;
+yp = y0 + t.*vy;
+
+d2 = (Xq - xp).^2 + (Yq - yp).^2;
+d2_min = min(d2, [], 2);
 end
 
 function mem_mb = local_get_mem_mb()
@@ -627,12 +1075,17 @@ fprintf(fid, 'medium.c0=%.15g; medium.rho0=%.15g; medium.beta=%.15g; medium.pref
 fprintf(fid, 'medium.use_absorp=%s;\n\n', local_bool_str(medium.use_absorp));
 
 fprintf(fid, '%% source\n');
-fprintf(fid, 'source.profile=''%s''; source.a=%.15g; source.v0=%.15g; source.v_ratio=%.15g;\n', ...
-    char(string(source.profile)), source.a, source.v0, source.v_ratio);
+fprintf(fid, 'source.profile=''%s'';\n', char(string(source.profile)));
+if isfield(source,'mode')
+    fprintf(fid, 'source.mode=''%s'';\n', char(string(source.mode)));
+end
+fprintf(fid, 'source.a=%.15g; source.v0=%.15g; source.v_ratio=%.15g;\n', ...
+    source.a, source.v0, source.v_ratio);
 if isfield(source,'m_custom')
     fprintf(fid, 'source.m_custom=%d;\n', source.m_custom);
 end
-fprintf(fid, 'source.f1=%.15g; source.f2=%.15g; source.fa=%.15g;\n\n', source.f1, source.f2, source.fa);
+fprintf(fid, 'source.f1=%.15g; source.f2=%.15g; source.fa=%.15g;\n\n', ...
+    source.f1, source.f2, source.fa);
 
 fprintf(fid, '%% calc.fht\n');
 cf = calc.fht;
