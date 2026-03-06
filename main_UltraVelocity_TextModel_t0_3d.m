@@ -80,6 +80,15 @@ handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
 l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
+r_boundary_coef = 1.8;  % 2D图像范围
+r_small_k = 4;          % 小圆
+r_large_k = 16;         % 大圆
+
+extra = struct();
+extra.l = l;
+extra.r_boundary_coef = r_boundary_coef;
+extra.r_small_k = r_small_k;
+extra.r_large_k = r_large_k;
 
 % Define vn(x,y)
 vn_handle = @(X,Y) local_spiral_binary_grating_vn(X,Y, ...
@@ -121,7 +130,7 @@ if (SAVE_PNG || SAVE_MAT)
     SAVE_DIR = sprintf('LiteratureReview__%s__%s__%s__%s', f_str, a_str, l_str, tstr);
 
     if ~exist(SAVE_DIR, 'dir'), mkdir(SAVE_DIR); end
-    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig);
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig, extra);
 else
     SAVE_DIR = '';
 end
@@ -144,7 +153,7 @@ calc.dim.z_use = z_use;
 % Observation plane range (paper-like: scale ~ lambda)
 %% ============================================================
 half_width = 0.5 * lambda1;
-r_boundary = 2 * half_width;
+r_boundary = r_boundary_coef * half_width;
 dx_obs = half_width / 32;
 
 x_obs = -r_boundary:dx_obs:r_boundary;
@@ -244,8 +253,8 @@ if do_fig5_like
     Cnz_all = Cpts(Cpts(:,3)~=0, :);
 
     dxy = mean_grid_step(X,Y);
-    r_small = 4*dxy;
-    r_large = 12*dxy;
+    r_small = r_small_k * dxy;
+    r_large = r_large_k * dxy;
 
     if ~isempty(Cnz_all)
         [~,ii0] = min(Cnz_all(:,4));
@@ -599,7 +608,7 @@ for k = 1:numel(bad)
 end
 end
 
-function local_write_runinfo_txt(save_dir, medium, source, calc, fig)
+function local_write_runinfo_txt(save_dir, medium, source, calc, fig, extra)
 fp = fullfile(save_dir, 'run_info.txt');
 fid = fopen(fp, 'w');
 if fid < 0
@@ -636,6 +645,12 @@ fprintf(fid, 'use_freq=''%s''; dis_coe=%.15g; margin=%.15g; src_discretization='
 
 fprintf(fid, '\n%% fig\n');
 fprintf(fid, 'fig.unwrap=%s;\n', local_bool_str(fig.unwrap));
+
+fprintf(fid, '\n%% extra (for reproduction)\n');
+fprintf(fid, 'l=%d;\n', extra.l);
+fprintf(fid, 'r_boundary_coef=%.15g;\n', extra.r_boundary_coef);
+fprintf(fid, 'r_small_k=%d;  %% r_small = r_small_k * dxy\n', extra.r_small_k);
+fprintf(fid, 'r_large_k=%d;  %% r_large = r_large_k * dxy\n', extra.r_large_k);
 
 fprintf(fid, '\n===== END =====\n');
 end
