@@ -69,6 +69,9 @@ end
 if ~isfield(calc.dim,'coef') || isempty(calc.dim.coef)
     calc.dim.coef = 1/(2*pi);
 end
+if ~isfield(calc.dim,'lock_z_to_input') || isempty(calc.dim.lock_z_to_input)
+    calc.dim.lock_z_to_input = false;
+end
 
 % -------------------- build consistent source + grids --------------------
 [source, fht, ~] = make_source_velocity(source, medium, calc);
@@ -237,9 +240,16 @@ if do_dim
             'This DIM velocity block is plane-only: obs_grid.z must be scalar.');
     end
 
-    % ---------- map z_use to nearest FHT z grid ----------
-    [~, iz_dim] = min(abs(z(:) - z_pick));
-    z_use_dim = z(iz_dim);
+    % ---------- choose DIM z_use ----------
+    if calc.dim.lock_z_to_input
+        % force DIM to use the z specified in the main script
+        z_use_dim = z_pick;
+        iz_dim    = NaN;   % no snapping to FHT z-grid
+    else
+        % legacy behavior: snap to nearest FHT z grid point
+        [~, iz_dim] = min(abs(z(:) - z_pick));
+        z_use_dim = z(iz_dim);
+    end
 
     % ---------- defaults: blocks ----------
     if ~isfield(calc.dim,'block_size') || isempty(calc.dim.block_size)
@@ -400,7 +410,9 @@ if do_dim
     result.dim = struct();
     result.dim.method          = "DIM-Rayleigh velocity (plane-only)";
     result.dim.z_use           = z_use_dim;
+    result.dim.z_use_input     = z_pick;
     result.dim.iz_dim          = iz_dim;
+    result.dim.lock_z_to_input = calc.dim.lock_z_to_input;
     result.dim.x               = x_obs;
     result.dim.y               = y_obs;
     result.dim.X               = X2;
