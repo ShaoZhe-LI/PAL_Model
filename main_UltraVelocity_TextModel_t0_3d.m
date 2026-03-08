@@ -85,8 +85,8 @@ source.a = r0 + M * P;
 handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
-l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
-r_boundary_coef = 1.2;  % 2D图像范围
+l = 3;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
+r_boundary_coef = 1.8;  % 2D图像范围
 r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
 qk_vec = [1:10];
@@ -206,7 +206,7 @@ fig.unwrap = false;
 %% -------------------- save setup --------------------
 if (SAVE_PNG || SAVE_MAT)
     tstr  = datestr(datetime('now'), 'mmdd_HHMM');
-    f_str = sprintf('f1=%.0fk', source.f1/1e3);
+    f_str = sprintf('f=%.0fk', source.f2/1e3);
     l_str = sprintf('l=%d', l);
     a_str = sprintf('a=%.1fmm', source.a*1e3);
     SAVE_DIR = sprintf('LiteratureReview__%s__%s__%s__%s', f_str, a_str, l_str, tstr);
