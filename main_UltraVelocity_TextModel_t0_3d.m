@@ -20,6 +20,10 @@
 % Colormap:
 %   - magnitude: vik + shading interp
 %   - phase:     hsv + shading flat
+%
+% NOTE:
+%   - All PHYSICS/CALCULATION still use SI unit: meter (m)
+%   - All PLOTTING axes are displayed in millimeter (mm)
 % ============================================================
 
 % 本代码箭头方向为长轴方向与初始时刻振速方向确定
@@ -85,11 +89,11 @@ source.a = r0 + M * P;
 handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
-l = 3;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
+l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
 r_boundary_coef = 1.8;  % 2D图像范围
 r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
-qk_vec = [1:10];
+qk_vec = 1:10;
 
 if strcmp(source.mode,'triangle_normal')
     source.f1   = 68e3;
@@ -125,13 +129,13 @@ source.custom_vn_xy_handle_2 = @(X,Y) source.v_ratio * vn_handle(X,Y);
 %% -------------------- detection options --------------------
 copt = struct();
 
-% 最多保留多少个C点候选（防止漏检，l大时适当加大），25
+% 最多保留多少个C点候选（防止漏检，l大时适当加大）
 copt.max_candidates = 80;
-% |S|阈值系数：|S| < 0.2*median(|S|) 才算候选（越大候选越多），0.1
+% |S|阈值系数：|S| < 0.2*median(|S|) 才算候选（越大候选越多）
 copt.smag_rel_th    = 0.2;
-% 去重半径(像素)：两候选点距离<=(2)这个数量的像素视为重复，只保留一个（越小越容易分辨近邻点）
+% 去重半径(像素)：两候选点距离<=(2)这个数量的像素视为重复，只保留一个
 copt.min_sep_pix    = 2;
-% 绕转数计算环半径(像素)：越小越“局部”更易分裂点，但抗噪更弱, 1
+% 绕转数计算环半径(像素)
 copt.ring_radius    = 1;
 
 %% -------------------- preview source pattern --------------------
@@ -147,21 +151,20 @@ Vsrc = vn_handle(Xs, Ys);
 mask_disk = hypot(Xs, Ys) <= source.a;
 Vsrc(~mask_disk) = NaN;
 
-Vsrc = vn_handle(Xs, Ys);
-mask_disk = hypot(Xs, Ys) <= source.a;
-Vsrc(~mask_disk) = NaN;
+Xsrc_mm = 1e3 * Xs;
+Ysrc_mm = 1e3 * Ys;
 
 fig_source = figure('Color','w', 'Position',[120 120 760 680], ...
     'Name', sprintf('Source pattern: %s', char(string(source.mode))));
 ax = axes; %#ok<NASGU>
-surf(Xs, Ys, zeros(size(Xs)), Vsrc, 'EdgeColor','none');
+surf(Xsrc_mm, Ysrc_mm, zeros(size(Xs)), Vsrc, 'EdgeColor','none');
 view(2);
 shading flat;
 axis equal;
-xlim(src_margin*[-source.a, source.a]);
-ylim(src_margin*[-source.a, source.a]);
-xlabel('$x$ (m)','Interpreter','latex');
-ylabel('$y$ (m)','Interpreter','latex');
+xlim(1e3 * src_margin * [-source.a, source.a]);
+ylim(1e3 * src_margin * [-source.a, source.a]);
+xlabel('$x$ (mm)','Interpreter','latex');
+ylabel('$y$ (mm)','Interpreter','latex');
 title(sprintf('Source pattern: %s', strrep(char(string(source.mode)),'_','\_')), ...
     'Interpreter','none');
 
@@ -176,7 +179,7 @@ fontsize(gca,20,'points');
 % show aperture boundary
 hold on;
 tt = linspace(0,2*pi,600);
-plot(source.a*cos(tt), source.a*sin(tt), 'k-', 'LineWidth', 1.0);
+plot(1e3*source.a*cos(tt), 1e3*source.a*sin(tt), 'k-', 'LineWidth', 1.0);
 hold off;
 
 %% -------------------- calc --------------------
@@ -225,10 +228,6 @@ z_max = z_min * (1 + M*P/r0);
 z_target = 0.5 * (z_min + z_max);
 
 % Get consistent z grid
-% [~, fht_tmp] = make_source_velocity(source, medium, calc);
-% z_full = fht_tmp.z_ultra(:);
-% [~, iz] = min(abs(z_full - z_target));
-% z_use = z_full(iz);
 z_use = z_target;
 calc.dim.z_use = z_use;
 calc.dim.lock_z_to_input = true;
@@ -273,6 +272,13 @@ Y  = resV.dim.Y;
 vX = resV.dim.v_x_f2;
 vY = resV.dim.v_y_f2;
 vZ = resV.dim.v_z_f2;
+
+Xmm = 1e3 * X;
+Ymm = 1e3 * Y;
+z0mm = 1e3 * z_use;
+
+fprintf('X range = [%.3f, %.3f] mm\n', min(Xmm(:)), max(Xmm(:)));
+fprintf('Y range = [%.3f, %.3f] mm\n', min(Ymm(:)), max(Ymm(:)));
 
 S    = vX.^2 + vY.^2 + vZ.^2;                 % v·v (NO conjugate)
 Vmag = sqrt(abs(vX).^2 + abs(vY).^2 + abs(vZ).^2);
@@ -424,36 +430,40 @@ if do_fig5_like
     col_pos = [0 0.45 1.00];
     col_neg = [1.00 0.35 0.35];
 
-    qscale3 = 0.25;     % arrow length scale (3D)
-    z0 = z_use;         % all points lie on plane z=z_use
+    qscale3 = 0.25;     % arrow length scale (3D, displayed in mm axes)
+    z0 = z0mm;          % all points lie on plane z=z_use, display in mm
 
     figure('Color','w','Position',[120 120 1200 560], ...
-        'Name',sprintf('Fig5-like bi-vectors (3D) @ z=%.4g m', z_use));
+        'Name',sprintf('Fig5-like bi-vectors (3D) @ z=%.4g mm', z0mm));
     tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
 
     % --- left: C1 ---
     nexttile; hold on; box on; grid on;
-    plot3(C1(:,1), C1(:,2), z0*ones(size(C1,1),1), 'k', 'LineWidth', 1.0);
+    plot3(1e3*C1(:,1), 1e3*C1(:,2), z0*ones(size(C1,1),1), 'k', 'LineWidth', 1.0);
     local_plot_bivectors3d(C1, E1, z0, qscale3, col_pos, col_neg);
-    plot3(p1(1), p1(2), z0, 'k.', 'MarkerSize', 18);
+    plot3(1e3*p1(1), 1e3*p1(2), z0, 'k.', 'MarkerSize', 18);
     title('$C_1$ (3D bi-vectors)','Interpreter','latex');
-    xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex'); zlabel('$z$ (m)','Interpreter','latex');
+    xlabel('$x$ (mm)','Interpreter','latex');
+    ylabel('$y$ (mm)','Interpreter','latex');
+    zlabel('$z$ (mm)','Interpreter','latex');
     axis equal;
     view(35,25);
 
     % --- right: C2 ---
     nexttile; hold on; box on; grid on;
-    plot3(C2(:,1), C2(:,2), z0*ones(size(C2,1),1), 'k', 'LineWidth', 1.0);
+    plot3(1e3*C2(:,1), 1e3*C2(:,2), z0*ones(size(C2,1),1), 'k', 'LineWidth', 1.0);
     % show C1 range on C2 panel
-    plot3(C1(:,1), C1(:,2), z0*ones(size(C1,1),1), '--', 'LineWidth', 1.6, 'Color', [0 0.7 0]);
+    plot3(1e3*C1(:,1), 1e3*C1(:,2), z0*ones(size(C1,1),1), '--', 'LineWidth', 1.6, 'Color', [0 0.7 0]);
     local_plot_bivectors3d(C2, E2, z0, qscale3, col_pos, col_neg);
     if ~isempty(picked)
-        plot3(picked(:,1), picked(:,2), z0*ones(size(picked,1),1), 'k.', 'MarkerSize', 18);
+        plot3(1e3*picked(:,1), 1e3*picked(:,2), z0*ones(size(picked,1),1), 'k.', 'MarkerSize', 18);
     else
-        plot3(p1(1), p1(2), z0, 'k.', 'MarkerSize', 18);
+        plot3(1e3*p1(1), 1e3*p1(2), z0, 'k.', 'MarkerSize', 18);
     end
     title('$C_2$ (3D bi-vectors)','Interpreter','latex');
-    xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex'); zlabel('$z$ (m)','Interpreter','latex');
+    xlabel('$x$ (mm)','Interpreter','latex');
+    ylabel('$y$ (mm)','Interpreter','latex');
+    zlabel('$z$ (mm)','Interpreter','latex');
     axis equal;
     view(35,25);
 
@@ -475,53 +485,56 @@ lim_v  = [min(Vmag(:)),    max(Vmag(:))];
 %% ============================================================
 do_quiver = true;
 
-figure('Name', sprintf('|v| & angle(vz) @ z=%.3f m', z_use), ...
+figure('Name', sprintf('|v| & angle(vz) @ z=%.3f mm', z0mm), ...
     'position',[100 100 1400 650], 'Color','w');
 set(gcf,'Renderer','opengl');
 
 % ---- |v| ----
 ax1 = subplot(1,2,1);
-surf(X, Y, zeros(size(X)), Vmag, 'EdgeColor','none'); view(2);
+surf(Xmm, Ymm, zeros(size(X)), Vmag, 'EdgeColor','none'); view(2);
 shading interp; colormap(ax1, MyColor('vik'));
 if lim_v(2) > lim_v(1), clim(lim_v); end
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$|v|$';
 set(clb,'Fontsize',18);
 
 axis equal;
-xlim([min(X(:)) max(X(:))]); ylim([min(Y(:)) max(Y(:))]);
+xlim([min(Xmm(:)) max(Xmm(:))]); ylim([min(Ymm(:)) max(Ymm(:))]);
 set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points');
-xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
+xlabel('$x$ (mm)','Interpreter','latex'); ylabel('$y$ (mm)','Interpreter','latex');
 title('$|v|$', 'Interpreter','latex','Fontsize',18);
 
 if do_quiver
     hold on;
     qstep_r = max(1, round(size(X,1)/25));
     qstep_t = max(1, round(size(X,2)/60));
-    Xq  = X(1:qstep_r:end, 1:qstep_t:end);
-    Yq  = Y(1:qstep_r:end, 1:qstep_t:end);
+    Xq  = Xmm(1:qstep_r:end, 1:qstep_t:end);
+    Yq  = Ymm(1:qstep_r:end, 1:qstep_t:end);
     vXq = real(vX(1:qstep_r:end, 1:qstep_t:end));
     vYq = real(vY(1:qstep_r:end, 1:qstep_t:end));
     sc  = max(hypot(vXq(:), vYq(:)));
-    if sc > 0, vXq = vXq/sc; vYq = vYq/sc; end
+    if sc > 0
+        vXq = vXq/sc;
+        vYq = vYq/sc;
+    end
     quiver(Xq, Yq, vXq, vYq, 0.6, 'k', 'LineWidth', 1.0);
     hold off;
 end
 
 % ---- angle(vz)/pi ----
 ax2 = subplot(1,2,2);
-surf(X, Y, zeros(size(X)), angle(vZ)/pi, 'EdgeColor','none'); view(2);
+surf(Xmm, Ymm, zeros(size(X)), angle(vZ)/pi, 'EdgeColor','none'); view(2);
 shading flat; colormap(ax2, hsv); clim(lim_ph);
 clb = colorbar; clb.Title.Interpreter='latex'; clb.Title.String='$\angle v_z/\pi$';
 set(clb,'Fontsize',18);
 
 axis equal;
-xlim([min(X(:)) max(X(:))]); ylim([min(Y(:)) max(Y(:))]);
+xlim([min(Xmm(:)) max(Xmm(:))]); ylim([min(Ymm(:)) max(Ymm(:))]);
 set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points');
-xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
+xlabel('$x$ (mm)','Interpreter','latex'); ylabel('$y$ (mm)','Interpreter','latex');
 title('$\angle v_z/\pi$', 'Interpreter','latex','Fontsize',18);
 
-sgtitle(sprintf('Spiral source, DIM @ $z=%.3f$ m, $f_2=%.1f$ kHz, $l=%d$', ...
-    z_use, source.f2/1e3, l), 'Interpreter','latex','Fontsize',18);
+sgtitle(sprintf('Spiral source, DIM @ $z=%.3f$ mm, $f_2=%.1f$ kHz, $l=%d$', ...
+    z0mm, source.f2/1e3, l), 'Interpreter','latex','Fontsize',18);
 
 local_save_fig_png(gcf, sprintf('DIM_Vmag_PhaseVz_spiral_z%.4f_l%d', z_use, l));
 
@@ -547,13 +560,17 @@ local_save_fig_png(fig_source, sprintf('SourcePattern_%s', char(string(source.mo
 function local_plot_mag_phase_cart(X, Y, V, nameStr, z_use, f_hz, lim_mag, lim_ph, isS)
 if nargin < 9, isS = false; end
 
+Xmm = 1e3 * X;
+Ymm = 1e3 * Y;
+zmm = 1e3 * z_use;
+
 figure('Color','w', 'Position',[100 100 1400 650], ...
-    'Name',sprintf('%s (DIM) @ z=%.3f m', nameStr, z_use));
+    'Name',sprintf('%s (DIM) @ z=%.3f mm', nameStr, zmm));
 set(gcf,'Renderer','opengl');
 
 % ----- magnitude -----
 ax1 = subplot(1,2,1);
-surf(X, Y, zeros(size(X)), abs(V), 'EdgeColor','none'); view(2);
+surf(Xmm, Ymm, zeros(size(X)), abs(V), 'EdgeColor','none'); view(2);
 shading interp; colormap(ax1, MyColor('vik'));
 if all(isfinite(lim_mag)) && lim_mag(2) > lim_mag(1), clim(lim_mag); end
 clb = colorbar;
@@ -566,14 +583,14 @@ end
 set(clb,'Fontsize',18);
 
 axis equal;
-xlim([min(X(:)) max(X(:))]); ylim([min(Y(:)) max(Y(:))]);
+xlim([min(Xmm(:)) max(Xmm(:))]); ylim([min(Ymm(:)) max(Ymm(:))]);
 set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points');
-xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
-title(sprintf('Magnitude @ $z=%.3f$ m', z_use), 'Interpreter','latex','Fontsize',18);
+xlabel('$x$ (mm)','Interpreter','latex'); ylabel('$y$ (mm)','Interpreter','latex');
+title(sprintf('Magnitude @ $z=%.3f$ mm', zmm), 'Interpreter','latex','Fontsize',18);
 
 % ----- phase/pi -----
 ax2 = subplot(1,2,2);
-surf(X, Y, zeros(size(X)), angle(V)/pi, 'EdgeColor','none'); view(2);
+surf(Xmm, Ymm, zeros(size(X)), angle(V)/pi, 'EdgeColor','none'); view(2);
 shading flat; colormap(ax2, hsv); clim(lim_ph);
 clb = colorbar;
 clb.Title.Interpreter = 'latex';
@@ -585,12 +602,12 @@ end
 set(clb,'Fontsize',18);
 
 axis equal;
-xlim([min(X(:)) max(X(:))]); ylim([min(Y(:)) max(Y(:))]);
+xlim([min(Xmm(:)) max(Xmm(:))]); ylim([min(Ymm(:)) max(Ymm(:))]);
 set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points');
-xlabel('$x$ (m)','Interpreter','latex'); ylabel('$y$ (m)','Interpreter','latex');
+xlabel('$x$ (mm)','Interpreter','latex'); ylabel('$y$ (mm)','Interpreter','latex');
 title('Phase', 'Interpreter','latex','Fontsize',18);
 
-sgtitle(sprintf('DIM, $f=%.1f$ kHz, $z=%.3f$ m', f_hz/1e3, z_use), ...
+sgtitle(sprintf('DIM, $f=%.1f$ kHz, $z=%.3f$ mm', f_hz/1e3, zmm), ...
     'Interpreter','latex','Fontsize',18);
 end
 
@@ -644,9 +661,7 @@ b = P/(2*pi);
 
 switch mode
     case "spiral_abnormal"
-        % ============================================================
         % EXACTLY your original version
-        % ============================================================
         rho_m = rho(mask_ap);
         phi_m = phi(mask_ap);
 
@@ -662,59 +677,33 @@ switch mode
         vn(mask_ap) = v0 * g;
 
     case "spiral_normal"
-        % ============================================================
         % True constant-width strip wound into a spiral:
-        % define +v0 by nearest Euclidean distance to spiral centerline.
-        %
-        % Spiral centerline family:
-        %   rho = r0 + b * psi
-        % with psi = handed*l*phi + 2*pi*m
-        %
-        % We discretize the spiral centerline densely, then compute the
-        % nearest Euclidean distance from each grid point to the centerline.
-        % ============================================================
-
-        % ---- active points ----
         xq = X(mask_ap);
         yq = Y(mask_ap);
 
-        % ---- build dense spiral centerline samples ----
-        % total effective angle span
         psi_max = 2*pi*M;
-
-        % sampling step along angle; smaller -> smoother strip boundary
-        % use enough samples relative to strip width and pitch
         npsi = max(4000, ceil(psi_max / (2*pi) * 1200));
         psi = linspace(0, psi_max, npsi);
 
-        % centerline in polar
         rho_c = r0 + b*psi;
-
-        % convert to actual azimuth
-        % psi = handed*l*theta  -> theta = psi/(handed*l)
         theta_c = psi / (handed * l);
 
         xc = rho_c .* cos(theta_c);
         yc = rho_c .* sin(theta_c);
 
-        % keep only points inside aperture disk just in case
         keep = (xc.^2 + yc.^2) <= a^2;
         xc = xc(keep);
         yc = yc(keep);
 
-        % ---- nearest Euclidean distance to centerline ----
-        % For memory safety, do block processing.
         dn_min2 = inf(size(xq));
 
-        blk = 4000;   % query-point block size
+        blk = 4000;
         for ib = 1:blk:numel(xq)
             ie = min(ib + blk - 1, numel(xq));
 
             Xb = xq(ib:ie);
             Yb = yq(ib:ie);
 
-            % distance to all sampled centerline points
-            % result size: [num_block, num_centerline_samples]
             dx = Xb(:) - xc(:).';
             dy = Yb(:) - yc(:).';
             d2 = dx.^2 + dy.^2;
@@ -723,11 +712,6 @@ switch mode
         end
 
         dn_min = sqrt(dn_min2);
-
-        % ---- constant strip width ----
-        on = dn_min <= (dP/2);
-
-        % ---- constant strip width ----
         on = dn_min <= (dP/2);
 
         val = -v0 * ones(size(xq));
@@ -735,22 +719,10 @@ switch mode
 
         vn(mask_ap) = val;
 
-        case "triangle_normal"
-        % ============================================================
-        % Triangular spiral source:
-        %   outside outer boundary : 0
-        %   spiral strips          : +v0
-        %   middle background      : -v0
-        %   inside inner boundary  : 0
-        %
-        % Inner/outer triangular boundaries are obtained by offsetting
-        % the actual spiral centerline segments by dP/2.
-        % ============================================================
-
-        % ---- initialize all to zero ----
+    case "triangle_normal"
+        % Triangular spiral source
         vn = zeros(size(X));
 
-        % ---- generate triangular spiral centerline ----
         pts = local_make_triangle_spiral_centerline(r0, M, P, handed);
         if size(pts,1) < 6
             return;
@@ -759,36 +731,24 @@ switch mode
         segP0 = pts(1:end-1,:);
         segP1 = pts(2:end,:);
 
-        % ------------------------------------------------------------
-        % Outer boundary triangle:
-        % use the first 3 segments (outermost turn),
-        % offset them AWAY from the source interior by dP/2
-        % ------------------------------------------------------------
         seg0_outer = segP0(1:3,:);
         seg1_outer = segP1(1:3,:);
 
-        ref_outer = mean(pts(1:3,:), 1);   % a point roughly near the source interior
+        ref_outer = mean(pts(1:3,:), 1);
         outer_poly = local_triangle_from_three_segments(seg0_outer, seg1_outer, -dP/2, ref_outer);
 
-        % ------------------------------------------------------------
-        % Inner boundary triangle:
-        % use the last 3 segments (innermost turn),
-        % offset them TOWARD the void interior by dP/2
-        % ------------------------------------------------------------
         seg0_inner = segP0(end-2:end,:);
         seg1_inner = segP1(end-2:end,:);
 
-        ref_inner = mean(pts(end-3:end,:), 1);   % a point roughly inside the inner void
+        ref_inner = mean(pts(end-3:end,:), 1);
         inner_poly = local_triangle_from_three_segments(seg0_inner, seg1_inner, +dP/2, ref_inner);
 
-        % ---- masks on full grid ----
         [in_outer, on_outer] = inpolygon(X, Y, outer_poly(:,1), outer_poly(:,2));
         inside_outer = in_outer | on_outer;
 
         [in_inner, on_inner_poly] = inpolygon(X, Y, inner_poly(:,1), inner_poly(:,2));
         inside_inner = in_inner | on_inner_poly;
 
-        % ---- active region only inside outer boundary and aperture ----
         mask_ap = (rho <= a) & inside_outer;
         if ~any(mask_ap(:))
             return;
@@ -799,7 +759,6 @@ switch mode
 
         inside_inner_q = inside_inner(mask_ap);
 
-        % ---- point-to-segment distance to whole spiral ----
         d2_min = inf(size(xq));
 
         nSeg  = size(segP0,1);
@@ -827,13 +786,8 @@ switch mode
             d2_min(iq:jq) = d2_blk;
         end
 
-        % ---- strip region ----
         on_strip = sqrt(d2_min) <= (dP/2);
 
-        % ---- assign values ----
-        % default inside outer boundary = -v0
-        % spiral strips = +v0
-        % inner void = 0
         val = -v0 * ones(size(xq));
         val(on_strip) = +v0;
         val(inside_inner_q) = 0;
@@ -846,19 +800,6 @@ end
 end
 
 function poly = local_triangle_from_three_segments(segP0, segP1, offset_dist, ref_point)
-%LOCAL_TRIANGLE_FROM_THREE_SEGMENTS
-% Build a triangular polygon from 3 line segments by offsetting each line.
-%
-% Inputs
-%   segP0, segP1 : 3x2, segment start/end points
-%   offset_dist  : signed offset distance
-%                  +d -> toward ref_point side
-%                  -d -> away from ref_point side
-%   ref_point    : 1x2, a point that defines the interior side of each line
-%
-% Output
-%   poly         : 3x2 triangle vertices
-
 nvec = zeros(3,2);
 cval = zeros(3,1);
 
@@ -872,10 +813,8 @@ for k = 1:3
         error('Degenerate segment encountered in local_triangle_from_three_segments.');
     end
 
-    % one unit normal
     n = [-e(2), e(1)] / Le;
 
-    % force normal to point toward ref_point
     if dot(n, ref_point - p0) < 0
         n = -n;
     end
@@ -892,14 +831,6 @@ end
 end
 
 function p = local_intersect_two_lines(n1, c1, n2, c2)
-%LOCAL_INTERSECT_TWO_LINES
-% Solve:
-%   n1 * x = c1
-%   n2 * x = c2
-%
-% n1, n2 : 1x2
-% c1, c2 : scalars
-
 A = [n1(:).'; n2(:).'];
 b = [c1; c2];
 
@@ -945,7 +876,6 @@ end
 
 pts = pts(1:nkeep,:);
 
-% use outermost triangle centroid for centering
 if size(pts,1) >= 3
     pc = mean(pts(1:3,:), 1);
     pts = pts - pc;
@@ -953,16 +883,6 @@ end
 end
 
 function d2_min = local_point_to_segments_min_d2(Xq, Yq, P0, P1)
-%LOCAL_POINT_TO_SEGMENTS_MIN_D2
-% Minimum squared distance from query points to a batch of segments.
-%
-% Inputs
-%   Xq, Yq : Nq x 1
-%   P0, P1 : Ns x 2
-%
-% Output
-%   d2_min : Nq x 1
-
 Xq = Xq(:);
 Yq = Yq(:);
 
@@ -1009,8 +929,10 @@ end
 end
 
 function s = local_fmt_mem(x)
-if isnan(x), s = 'NaN';
-else,        s = sprintf('%.1f MB', x);
+if isnan(x)
+    s = 'NaN';
+else
+    s = sprintf('%.1f MB', x);
 end
 end
 
@@ -1029,7 +951,6 @@ catch
 end
 end
 
-
 function local_save_fig_fig(fig_handle, base_name)
 global SAVE_PNG SAVE_DIR
 if isempty(SAVE_PNG) || ~SAVE_PNG, return; end
@@ -1039,9 +960,8 @@ fname = local_sanitize_filename(base_name);
 fp = fullfile(SAVE_DIR, [fname, '.fig']);
 set(fig_handle, 'Color', 'w');
 try
-    savefig(fig_handle, fp);                % <-- 用 savefig 保存 .fig
+    savefig(fig_handle, fp);
 catch
-    % 兼容旧版本 MATLAB
     try
         saveas(fig_handle, fp);
     catch
@@ -1118,7 +1038,11 @@ fprintf(fid, '\n===== END =====\n');
 end
 
 function s = local_bool_str(x)
-if logical(x), s = 'true'; else, s = 'false'; end
+if logical(x)
+    s = 'true';
+else
+    s = 'false';
+end
 end
 
 function dxy = mean_grid_step(X,Y)
@@ -1195,7 +1119,7 @@ q = round(w/(2*pi));
 end
 
 function C = local_make_circle(center_xy, radius, Nsamp)
-tt = linspace(0,2*pi,Nsamp+1);   % include endpoint
+tt = linspace(0,2*pi,Nsamp+1);
 C  = [center_xy(1)+radius*cos(tt(:)), center_xy(2)+radius*sin(tt(:))];
 end
 
@@ -1237,8 +1161,8 @@ end
 end
 
 function local_plot_bivectors3d(C, E, z0, qscale, col_pos, col_neg)
-% Plot bi-vectors (±E) along a closed contour C on plane z=z0
-% C may be explicitly closed (last==first); E is computed on C(1:end-1,:)
+% Plot bi-vectors (±E) along a closed contour C on plane z=z0 (display in mm)
+% C is in meter; z0 is already in mm here
 
 C_use = C;
 if size(C,1) >= 2 && norm(C(end,:) - C(1,:)) < 1e-12
@@ -1249,8 +1173,8 @@ NsC = size(C_use,1);
 NsE = size(E,1);
 Ns  = min(NsC, NsE);
 
-x  = C_use(1:Ns,1);
-y  = C_use(1:Ns,2);
+x  = 1e3 * C_use(1:Ns,1);
+y  = 1e3 * C_use(1:Ns,2);
 z  = z0*ones(Ns,1);
 
 ex = E(1:Ns,1);
