@@ -706,28 +706,23 @@ if do_fig8_theory
     lat_pw = asin(max(-1, min(1, nz_pw)));
     RGB_pw = local_dirfield_to_rgb_paper(az_pw, lat_pw);
 
-    % optional horizontal guide lines (only for visual reference)
     row_h = 0.90 * lambda_pw;
     y_edges_pw = (-2:2) * row_h;
     y_edges_pw = y_edges_pw(y_edges_pw >= -L_half & y_edges_pw <= L_half);
 
-    % ---- white box / selected cell: fully continuous control in x and y ----
-    % adjusted as requested:
-    %   - slightly left
-    %   - noticeably lower
-    %   - overall larger
-    xc_pw     = 0.18 * lambda_pw;   % slightly more right
-    yc_pw     = -0.08 * lambda_pw;  % slightly more up
-    cell_w_pw = 1.55 * lambda_pw;   % wider
-    cell_h_pw = 1.55 * lambda_pw;   % taller
+    [~, idx0] = min(abs(0.5*(y_edges_pw(1:end-1)+y_edges_pw(2:end))));
+    row_id_pw = idx0 + 1;
 
+    y1c = y_edges_pw(row_id_pw);
+    y2c = y_edges_pw(row_id_pw+1);
+
+    cell_w_pw = 1.1 * lambda_pw;
+    xc_pw = 0.20 * lambda_pw;
     x1c = xc_pw - 0.5 * cell_w_pw;
     x2c = xc_pw + 0.5 * cell_w_pw;
-    y1c = yc_pw - 0.5 * cell_h_pw;
-    y2c = yc_pw + 0.5 * cell_h_pw;
 
     mask_cell_pw = (Xpw >= x1c) & (Xpw <= x2c) & ...
-        (Ypw >= y1c) & (Ypw <= y2c) & mask_pw;
+                   (Ypw >= y1c) & (Ypw <= y2c) & mask_pw;
 
     fig8_th = figure('Color','w','Position',[120 120 1320 620], ...
         'Name', 'Fig8-like THEORY from ideal 3-plane-wave model');
@@ -767,17 +762,11 @@ if do_fig8_theory
     hold(axb,'on');
     box(axb,'on');
 
-    [Xsph, Ysph, Zsph] = sphere(160);
-
+    [Xsph, Ysph, Zsph] = sphere(120);
     surf(axb, Xsph, Ysph, Zsph, ...
-        'FaceColor',[0.92 0.92 0.92], ...
-        'EdgeColor','none', ...
-        'FaceAlpha',0.42);
-
-    material(axb, 'dull');
-    lighting(axb, 'gouraud');
-    camlight(axb, 'headlight');
-    camlight(axb, 'right');
+        'FaceColor',[0.90 0.90 0.90], ...
+        'EdgeColor',[0.82 0.82 0.82], ...
+        'FaceAlpha',0.08, 'EdgeAlpha',0.08);
 
     nx_cell_pw = nx_pw(mask_cell_pw);
     ny_cell_pw = ny_pw(mask_cell_pw);
@@ -787,82 +776,21 @@ if do_fig8_theory
     lat_cell_pw = asin(max(-1, min(1, nz_cell_pw)));
     rgb_cell_pw = local_dirpts_to_rgb_paper(az_cell_pw, lat_cell_pw);
 
-    % slightly sparser points on the sphere
-    idx_pick = 1:2:numel(nx_cell_pw);
-
-    nx_q  = nx_cell_pw(idx_pick);
-    ny_q  = ny_cell_pw(idx_pick);
-    nz_q  = nz_cell_pw(idx_pick);
-    rgb_q = rgb_cell_pw(idx_pick,:);
-
-    % lift points slightly above sphere to avoid z-fighting
-    r_pts = 1.015;
-    px = r_pts * nx_q;
-    py = r_pts * ny_q;
-    pz = r_pts * nz_q;
-
-    scatter3(axb, px, py, pz, 18, rgb_q, ...
-        'filled', ...
-        'MarkerEdgeColor',[0.35 0.35 0.35], ...
-        'LineWidth',0.25);
-
-    qL = 1.28;
-    quiver3(axb, 0,0,0, qL,0,0, 0, 'k', 'LineWidth',1.2, 'MaxHeadSize',0.18);
-    quiver3(axb, 0,0,0, 0,qL,0, 0, 'k', 'LineWidth',1.2, 'MaxHeadSize',0.18);
-    quiver3(axb, 0,0,0, 0,0,qL, 0, 'k', 'LineWidth',1.2, 'MaxHeadSize',0.18);
-
-    text(axb, qL+0.05, 0, 0, '$x$', 'Interpreter','latex', 'FontSize',18);
-    text(axb, 0, qL+0.05, 0, '$y$', 'Interpreter','latex', 'FontSize',18);
-    text(axb, 0, 0, qL+0.05, '$z$', 'Interpreter','latex', 'FontSize',18);
+    scatter3(axb, nx_cell_pw, ny_cell_pw, nz_cell_pw, 7, rgb_cell_pw, ...
+        'filled', 'MarkerEdgeColor','none');
 
     axis(axb,'equal');
-    xlim(axb,[-1.35 1.35]); ylim(axb,[-1.35 1.35]); zlim(axb,[-1.35 1.35]);
-    view(axb,28,18);
+    xlim(axb,[-1 1]); ylim(axb,[-1 1]); zlim(axb,[-1 1]);
+    view(axb,24,18);
     set(axb,'LineWidth',1.5,'TickLabelInterpreter','latex');
     fontsize(axb,18,'points');
-    axis(axb,'off');
+    xlabel(axb,'$x$','Interpreter','latex');
+    ylabel(axb,'$y$','Interpreter','latex');
+    zlabel(axb,'$z$','Interpreter','latex');
     title(axb,'(b)','Interpreter','latex','FontSize',18);
 
     local_save_fig_png(gcf, sprintf('THEORY_Fig8ab_skyrmion_3pw_f%.1fk', source.f2/1e3));
     local_save_fig_fig(gcf, sprintf('THEORY_Fig8ab_skyrmion_3pw_f%.1fk', source.f2/1e3));
-end
-
-%% ============================================================
-% Fig.8-like palette legend: color/brightness vs angular coordinates
-%% ============================================================
-do_fig8_palette = true;
-
-if do_fig8_palette
-    n_az  = 401;
-    n_lat = 201;
-
-    az_vec  = linspace(-pi, pi, n_az);
-    lat_vec = linspace(-pi/2, pi/2, n_lat);
-
-    [AZ, LAT] = meshgrid(az_vec, lat_vec);
-
-    RGB_leg = local_dirfield_to_rgb_paper(AZ, LAT);
-
-    figure('Color','w', 'Position',[140 140 900 420], ...
-        'Name','Fig8-like direction-color legend');
-
-    image(az_vec/pi, lat_vec/pi, RGB_leg);
-    set(gca,'YDir','normal');
-    axis tight;
-
-    set(gca,'LineWidth',1.5,'TickLabelInterpreter','latex');
-    fontsize(gca,18,'points');
-
-    xlabel('azimuth / $\pi$', 'Interpreter','latex');
-    ylabel('latitude / $\pi$', 'Interpreter','latex');
-
-    xticks([-1 -0.5 0 0.5 1]);
-    yticks([-0.5 -0.25 0 0.25 0.5]);
-
-    title('Direction-color legend', 'Interpreter','latex', 'FontSize',18);
-
-    local_save_fig_png(gcf, 'THEORY_Fig8_palette_legend');
-    local_save_fig_fig(gcf, 'THEORY_Fig8_palette_legend');
 end
 
 
@@ -1568,47 +1496,46 @@ end
 function RGB = local_dirfield_to_rgb_paper(az, lat)
 h = mod(az + pi, 2*pi) / (2*pi);
 
-% desired behavior:
-% upper half: brighter color -> white
-% lower half: darker color  -> black
-gamma_w    = 1.40;   % white appears mainly near the top
-gamma_b    = 6.6;   % black appears mainly near the bottom
-gamma_s    = 0.72;   % color band width
+% ===== balanced middle-ground parameters =====
+gamma_w    = 0.46;
+gamma_b    = 0.78;
+gamma_s    = 0.78;
 
-sat_gain   = 0.96;
+white_soft = 1.00;
+black_soft = 0.92;
+dark_gain  = 0.22;
+inner_gain = 0.22;
+sat_gain   = 0.93;
+% ============================================
+
 rgb_eq = hsv2rgb(cat(3, h, sat_gain*ones(size(h)), ones(size(h))));
-rgb_eq = 1.08 * rgb_eq;
+rgb_eq = 0.97 * rgb_eq;
 
-t  = (2/pi) * lat;   % latitude normalized to [-1,1]
-tp = max(t, 0);      % upper half
-tn = max(-t, 0);     % lower half
+t = (2/pi) * lat;
 
-% keep color over a broad region
+w = max(t, 0).^gamma_w;
+w = w.^white_soft;
+
+b = max(-t, 0).^gamma_b;
+b = b.^black_soft;
+
 eq = max(0, 1 - abs(t).^gamma_s);
 
-% upper colors intrinsically brighter, lower colors intrinsically darker
-bright_fac = 0.88 + 0.22 * tp;   % upper half -> brighter
-dark_fac   = 0.58 + 0.42 * tn;   % lower half -> darker
-
-% white / black weights
-w_top = min(1, 1.35 * tp.^gamma_w);
-b_bot = min(1, 0.82 * tn.^gamma_b);
+bright_near_white = inner_gain * max(t,0) .* eq;
+dark_outer = dark_gain * max(-t,0) .* (0.20 + 0.80*eq);
 
 RGB = zeros([size(h), 3]);
 for k = 1:3
     ch = rgb_eq(:,:,k);
 
-    % start from color with different upper/lower brightness
     val = eq .* ch;
-    val(t >= 0) = 1.35 * val(t >= 0);
-    val(t >= 0) = bright_fac(t >= 0) .* val(t >= 0);
-    val(t <  0) = (1 - 0.28*dark_fac(t < 0)) .* val(t < 0);
+    val = val + bright_near_white;
 
-    % blend to white at the top
-    val = val .* (1 - 0.88*w_top) + w_top .* 1;
+    % softer blending than the aggressive version
+    val = val .* (1 - 0.88*w - 0.35*b) + w .* 1 + b .* 0;
 
-    % blend to black at the bottom
-    val = val .* (1 - 0.72*b_bot);
+    % mild outer darkening
+    val = val .* (1 - 0.16*dark_outer);
 
     RGB(:,:,k) = val;
 end
@@ -1626,37 +1553,40 @@ end
 function rgb = local_dirpts_to_rgb_paper(az, lat)
 h = mod(az + pi, 2*pi) / (2*pi);
 
-gamma_w    = 1.40;
-gamma_b    = 6.6;
-gamma_s    = 0.72;
+gamma_w    = 0.46;
+gamma_b    = 0.78;
+gamma_s    = 0.48;
 
-sat_gain   = 0.96;
+white_soft = 1.00;
+black_soft = 0.92;
+dark_gain  = 0.22;
+inner_gain = 0.22;
+sat_gain   = 0.75;
+
 rgb_eq = hsv2rgb([h(:), sat_gain*ones(numel(h),1), ones(numel(h),1)]);
-rgb_eq = 1.08 * rgb_eq;
+rgb_eq = 0.95 * rgb_eq;
 
-t  = (2/pi) * lat(:);
-tp = max(t, 0);
-tn = max(-t, 0);
+t = (2/pi) * lat(:);
+
+w = max(t, 0).^gamma_w;
+w = w.^white_soft;
+
+b = max(-t, 0).^gamma_b;
+b = b.^black_soft;
 
 eq = max(0, 1 - abs(t).^gamma_s);
 
-bright_fac = 0.88 + 0.22 * tp;
-dark_fac   = 0.58 + 0.42 * tn;
-
-w_top = min(1, 1.35 * tp.^gamma_w);
-b_bot = min(1, 0.82 * tn.^gamma_b);
+bright_near_white = inner_gain * max(t,0) .* eq;
+dark_outer = dark_gain * max(-t,0) .* (0.20 + 0.80*eq);
 
 rgb = zeros(numel(h),3);
 for k = 1:3
     ch = rgb_eq(:,k);
 
     val = eq .* ch;
-    val(t >= 0) = 1.35 * val(t >= 0);
-    val(t >= 0) = bright_fac(t >= 0) .* val(t >= 0);
-    val(t <  0) = (1 - 0.28*dark_fac(t < 0)) .* val(t < 0);
-
-    val = val .* (1 - 0.88*w_top) + w_top .* 1;
-    val = val .* (1 - 0.72*b_bot);
+    val = val + bright_near_white;
+    val = val .* (1 - 0.88*w - 0.35*b) + w .* 1 + b .* 0;
+    val = val .* (1 - 0.16*dark_outer);
 
     rgb(:,k) = val;
 end
