@@ -10,7 +10,7 @@
 %
 % Dependencies:
 %   - make_source_velocity.m
-%   - calc_ultrasound_velocity_field.m   (incl. DIM block)
+%   - calc_ultrasound_velocity_field.m
 %   - m_FHT.m, solve_kappa0.m
 %   - MyColor.m, fontsize.m
 % ============================================================
@@ -57,6 +57,8 @@ calc.dim.use_freq = 'f2';
 calc.dim.dis_coe = 16;
 calc.dim.margin = 1;
 calc.dim.src_discretization = 'polar'; % 'cart' or 'polar'
+calc.dim.block_size = 20000;
+calc.dim.src_block_size = 5000;
 
 % --- King analytic spectrum stability ---
 calc.king.gspec_method = 'analytic';
@@ -105,17 +107,17 @@ fprintf('z_target=%.3f, z_use=%.6f, ds=%d\n', z_target, z_use, ds);
 
 %% ============================================================
 % Prepare DIM observation grid (phi=0 line): x=rho_ds, y=0, z=z_use
-% ============================================================
-if ~isfield(calc,'dim') || ~isstruct(calc.dim), calc.dim = struct(); end
-calc.dim.z_use = z_use;  % required by DIM block in velocity solver
-
-calc.dim.obs_grid = struct();
-calc.dim.obs_grid.x = rho_ds(:).';  % 1 x Nx
-calc.dim.obs_grid.y = 0;            % 1 x Ny (=1)
-calc.dim.obs_grid.z = z_use;        % scalar
-
-calc.dim.block_size     = 20000;
-calc.dim.src_block_size = 5000;
+% NOTE:
+% - keep variable name obs_grid to avoid conflict with MATLAB grid()
+% - since obs_grid is explicitly passed, DIM will strictly follow obs_grid.dim
+%% ============================================================
+obs_grid = struct();
+obs_grid.dim = struct();
+obs_grid.dim.x = rho_ds(:).';   % 1 x Nx
+obs_grid.dim.y = 0;             % 1 x Ny (=1)
+obs_grid.dim.z = z_use;         % scalar
+obs_grid.dim.block_size = calc.dim.block_size;
+obs_grid.dim.src_block_size = calc.dim.src_block_size;
 
 %% ============================================================
 % Compute velocity field (King + DIM)
@@ -123,7 +125,7 @@ calc.dim.src_block_size = 5000;
 fprintf('\n==================== VELOCITY (KING + DIM) ====================\n');
 mem0 = get_mem_mb(); t0 = tic;
 
-resV = calc_ultrasound_velocity_field(source, medium, calc, 'both');
+resV = calc_ultrasound_velocity_field(source, medium, calc, obs_grid, 'both');
 
 tAll = toc(t0); mem1 = get_mem_mb();
 fprintf('Velocity time (both): %.3f s\n', tAll);
@@ -145,23 +147,31 @@ vP_king = vP_king_full(1:ds:end);
 vZ_king = vZ_king_full(1:ds:end);
 
 %% ============================================================
-% Extract DIM (f1) on line (y=0): Ny=1, Nx=numel(rho_ds)
+% Extract DIM (f1) on line (y=0): Ny=1, Nx=numel(rho_ds), Nz=1
 % ============================================================
-% enforce consistent indexing with obs_grid
-Nx_line = numel(calc.dim.obs_grid.x);
-if size(resV.dim.v_rho_f1,1) ~= 1 || size(resV.dim.v_rho_f1,2) ~= Nx_line
-    error('DIM output size mismatch: expected (Ny=1, Nx=%d).', Nx_line);
+Nx_line = numel(obs_grid.dim.x);
+Ny_line = numel(obs_grid.dim.y);
+Nz_line = numel(obs_grid.dim.z);
+
+szR = size(resV.dim.v_rho_f1);
+if numel(szR) < 3
+    szR(3) = 1;
 end
 
-vR_dim = reshape(resV.dim.v_rho_f1(1,1:Nx_line), [], 1);
-vP_dim = reshape(resV.dim.v_phi_f1(1,1:Nx_line), [], 1);
-vZ_dim = reshape(resV.dim.v_z_f1  (1,1:Nx_line), [], 1);
+if szR(1) ~= Ny_line || szR(2) ~= Nx_line || szR(3) ~= Nz_line
+    error('DIM output size mismatch: expected (Ny=%d, Nx=%d, Nz=%d), got (%d,%d,%d).', ...
+        Ny_line, Nx_line, Nz_line, szR(1), szR(2), szR(3));
+end
+
+vR_dim = reshape(resV.dim.v_rho_f1(1,1:Nx_line,1), [], 1);
+vP_dim = reshape(resV.dim.v_phi_f1(1,1:Nx_line,1), [], 1);
+vZ_dim = reshape(resV.dim.v_z_f1  (1,1:Nx_line,1), [], 1);
 
 %% ============================================================
 % Phase & errors (exclude rho=0 to avoid singular/ill-conditioned points)
 % ============================================================
 rho_line = rho_ds(:);
-mask_ok = rho_line > 0;          % drop rho=0 point
+mask_ok = rho_line > 0;
 rho_p = rho_line(mask_ok);
 
 vRk = vR_king(mask_ok); vRd = vR_dim(mask_ok);
@@ -184,10 +194,9 @@ errP_log = log10( abs(vPd - vPk) ./ (abs(vPk) + eps0) );
 errZ_log = log10( abs(vZd - vZk) ./ (abs(vZk) + eps0) );
 
 %% ============================================================
-% 1D FIGS: compare v_rho / v_phi / v_z  (3 subplots each) — style aligned
+% 1D FIGS: compare v_rho / v_phi / v_z  (3 subplots each)
 % ============================================================
 
-% -------- helper: unify axes style --------
 apply_axes_style = @(ax) set(ax,'LineWidth',2,'TickLabelInterpreter','latex');
 
 % -------------------- v_rho --------------------
@@ -271,23 +280,12 @@ apply_axes_style(gca); fontsize(gca,22,'points');
 
 local_save_fig_png(gcf, sprintf('vZ_1D_compare3_z%.3fm', z_use));
 
-
 %% ============================================================
 % 2D xOy @ z≈1 m (King + DIM-phase-extended) — side-by-side compare
-% One figure per metric (SPL-style layout):
-%   Fig1: |v|  (interp)    King | DIM
-%   Fig2: phase(vz)/pi (flat) King | DIM
-%   Fig3: s=v·v  |s| (interp) and angle(s)/pi (flat), King row + DIM row
-%
-% Seam fix: surf(view(2)) + theta-wrap (duplicate first column)
-% Magnitude: shading interp
-% Phase:     shading flat
-% Short titles (avoid truncation)
 %% ============================================================
 
 r_boundary = 0.04;
 
-% theta grids (linspace)
 Ntheta_k = 721;  theta_k = linspace(0, 2*pi, Ntheta_k);
 Ntheta_d = 181;  theta_d = linspace(0, 2*pi, Ntheta_d);
 
@@ -331,7 +329,6 @@ S_k    = vX2k.^2 + vY2k.^2 + vZ2k.^2;
 Smag_k = abs(S_k);
 Sph_k  = angle(S_k) / pi;
 
-% wrap theta to kill seam
 Xkw     = [Xk, Xk(:,1)];
 Ykw     = [Yk, Yk(:,1)];
 Vmag_kw = [Vmag_k, Vmag_k(:,1)];
@@ -339,7 +336,6 @@ VZph_kw = [VZph_k, VZph_k(:,1)];
 Smag_kw = [Smag_k, Smag_k(:,1)];
 Sph_kw  = [Sph_k,  Sph_k(:,1)];
 
-% for quiver
 vX_kw = [vX2k, vX2k(:,1)];
 vY_kw = [vY2k, vY2k(:,1)];
 vZ_kw = [vZ2k, vZ2k(:,1)];
@@ -367,7 +363,6 @@ S_d    = vX2d.^2 + vY2d.^2 + vZ2d.^2;
 Smag_d = abs(S_d);
 Sph_d  = angle(S_d) / pi;
 
-% wrap theta to kill seam
 Xdw     = [Xd, Xd(:,1)];
 Ydw     = [Yd, Yd(:,1)];
 Vmag_dw = [double(Vmag_d), double(Vmag_d(:,1))];
@@ -380,7 +375,7 @@ vY_dw = [double(vY2d), double(vY2d(:,1))];
 vZ_dw = [double(vZ2d), double(vZ2d(:,1))];
 
 %% ============================================================
-% Unified limits (so King/DIM comparable)
+% Unified limits
 %% ============================================================
 lim_Vmag = [min([Vmag_kw(:); Vmag_dw(:)]), max([Vmag_kw(:); Vmag_dw(:)])];
 lim_Smag = [min([Smag_kw(:); Smag_dw(:)]), max([Smag_kw(:); Smag_dw(:)])];
@@ -392,7 +387,6 @@ lim_ph   = [-1 1];
 figure('Name',sprintf('|v| (z=%.2f)', z_use), 'position',[100 100 1400 650]);
 set(gcf,'Renderer','opengl');
 
-% ---- King ----
 subplot(1,2,1);
 surf(Xkw, Ykw, zeros(size(Xkw)), Vmag_kw, 'EdgeColor','none'); view(2);
 shading interp; colormap(MyColor('vik')); clim(lim_Vmag);
@@ -414,7 +408,6 @@ if sc > 0, vXq = vXq/sc; vYq = vYq/sc; end
 quiver(Xq, Yq, vXq, vYq, 0.6, 'k', 'LineWidth', 1.0);
 hold off;
 
-% ---- DIM ----
 subplot(1,2,2);
 surf(Xdw, Ydw, zeros(size(Xdw)), Vmag_dw, 'EdgeColor','none'); view(2);
 shading interp; colormap(MyColor('vik')); clim(lim_Vmag);
@@ -476,7 +469,6 @@ local_save_fig_png(gcf, sprintf('cmp2D_PhaseVz_z%.2f_m%d', z_use, m_use));
 figure('Name',sprintf('s=v·v (z=%.2f)', z_use), 'position',[140 140 1400 900]);
 set(gcf,'Renderer','opengl');
 
-% ---- King |s| ----
 subplot(2,2,1);
 surf(Xkw, Ykw, zeros(size(Xkw)), Smag_kw, 'EdgeColor','none'); view(2);
 shading interp; colormap(MyColor('vik')); clim(lim_Smag);
@@ -486,7 +478,6 @@ set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points')
 xlabel('$x$','Interpreter','latex'); ylabel('$y$','Interpreter','latex');
 title('King $|s|$','Interpreter','latex','Fontsize',18);
 
-% ---- King angle(s)/pi ----
 subplot(2,2,2);
 surf(Xkw, Ykw, zeros(size(Xkw)), Sph_kw, 'EdgeColor','none'); view(2);
 shading flat; colormap('hsv'); clim(lim_ph);
@@ -496,7 +487,6 @@ set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points')
 xlabel('$x$','Interpreter','latex'); ylabel('$y$','Interpreter','latex');
 title('King $\angle s/\pi$','Interpreter','latex','Fontsize',18);
 
-% ---- DIM |s| ----
 subplot(2,2,3);
 surf(Xdw, Ydw, zeros(size(Xdw)), Smag_dw, 'EdgeColor','none'); view(2);
 shading interp; colormap(MyColor('vik')); clim(lim_Smag);
@@ -506,7 +496,6 @@ set(gca,'linewidth',2,'TickLabelInterpreter','latex'); fontsize(gca,22,'points')
 xlabel('$x$','Interpreter','latex'); ylabel('$y$','Interpreter','latex');
 title('DIM $|s|$','Interpreter','latex','Fontsize',18);
 
-% ---- DIM angle(s)/pi ----
 subplot(2,2,4);
 surf(Xdw, Ydw, zeros(size(Xdw)), Sph_dw, 'EdgeColor','none'); view(2);
 shading flat; colormap('hsv'); clim(lim_ph);
@@ -524,19 +513,6 @@ local_save_fig_png(gcf, sprintf('cmp2D_vdotv_z%.2f_m%d', z_use, m_use));
 %% ---- free DIM big vars (optional) ----
 clear vR2d vP2d vZ2d vX2d vY2d Vmag_d VZph_d S_d Smag_d Sph_d THd Rd Ephi_d cTd sTd
 clear Xd Yd Xdw Ydw Vmag_dw VZph_dw Smag_dw Sph_dw vX_dw vY_dw vZ_dw
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 %% ==================== local functions ====================
 

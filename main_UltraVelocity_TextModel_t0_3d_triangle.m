@@ -70,7 +70,7 @@ source.m_custom = 0;
 %   'spiral_abnormal' : 原始写法，径向等宽、法向不等宽
 %   'spiral_normal'   : 近似按螺旋局部法向等宽
 %   'triangle_normal' : 三角形
-source.mode = 'spiral_abnormal';
+source.mode = 'triangle_normal';
 
 % wavelength at f1
 lambda1 = medium.c0 / source.f2;
@@ -90,7 +90,7 @@ handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
 l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
-r_boundary_coef = 1.8;  % 2D图像范围
+r_boundary_coef = 1.2;  % 2D图像范围
 r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
 qk_vec = 1:10;
@@ -128,7 +128,6 @@ source.custom_vn_xy_handle_2 = @(X,Y) source.v_ratio * vn_handle(X,Y);
 
 %% -------------------- detection options --------------------
 copt = struct();
-
 copt.max_candidates = 80;
 copt.smag_rel_th    = 0.2;
 copt.min_sep_pix    = 2;
@@ -179,7 +178,7 @@ hold off;
 %% -------------------- calc --------------------
 calc = struct();
 
-% FHT not used for result plotting here, but make_source_velocity needs defaults
+% FHT not used, but make_source_velocity needs defaults
 calc.fht.N_FHT      = 32768;
 calc.fht.rho_max    = 0.25;
 calc.fht.Nh_scale   = 1.2;
@@ -195,6 +194,11 @@ calc.dim.margin   = 1;
 calc.dim.src_discretization = 'polar';   % 'cart' or 'polar'
 calc.dim.block_size     = 20000;
 calc.dim.src_block_size = 5000;
+
+% --- DIM pressure method for calc_ultrasound_field ---
+calc.dim.method = 'rayleigh';   % 'rayleigh' or 'asm'
+calc.dim.use_parallel = true;
+calc.dim.num_workers  = 4;
 
 %% -------------------- fig (for runinfo compatibility) --------------------
 fig = struct();
@@ -232,13 +236,13 @@ dx_obs = half_width / 32;
 x_obs = -r_boundary:dx_obs:r_boundary;
 y_obs = -r_boundary:dx_obs:r_boundary;
 
-% Keep variable name obs_grid to avoid conflict with MATLAB grid()
+% grid for BOTH calc_ultrasound_velocity_field and calc_ultrasound_field
 obs_grid = struct();
 obs_grid.dim = struct();
 obs_grid.dim.x = x_obs;
 obs_grid.dim.y = y_obs;
 obs_grid.dim.z = z_use;
-obs_grid.dim.block_size = calc.dim.block_size;
+obs_grid.dim.block_size     = calc.dim.block_size;
 obs_grid.dim.src_block_size = calc.dim.src_block_size;
 
 %% ============================================================
@@ -259,14 +263,50 @@ tAll = toc(t0); mem1 = get_mem_mb();
 fprintf('DIM time: %.3f s\n', tAll);
 fprintf('DIM memory: start %s, end %s, delta %s\n', fmt_mem(mem0), fmt_mem(mem1), fmt_mem(mem1-mem0));
 
-%% -------------------- fetch fields (use f2) --------------------
-X = resV.dim.X;
-Y = resV.dim.Y;
+%% ============================================================
+% Compute ultrasonic pressure field (DIM ONLY, same z_use)
+%% ============================================================
+fprintf('\n==================== DIM PRESSURE (SPIRAL SOURCE) ====================\n');
 
-% New unified DIM output is Ny x Nx x Nz; here Nz=1, so take the first slice
-vX = resV.dim.v_x_f2(:,:,1);
-vY = resV.dim.v_y_f2(:,:,1);
-vZ = resV.dim.v_z_f2(:,:,1);
+memP0 = get_mem_mb(); tP0 = tic;
+resP = calc_ultrasound_field(source, medium, calc, obs_grid, 'dim');
+tP = toc(tP0); memP1 = get_mem_mb();
+
+fprintf('DIM pressure time: %.3f s\n', tP);
+fprintf('DIM pressure memory: start %s, end %s, delta %s\n', ...
+    fmt_mem(memP0), fmt_mem(memP1), fmt_mem(memP1-memP0));
+
+%% -------------------- fetch fields (use f2) --------------------
+X  = resV.dim.X;
+Y  = resV.dim.Y;
+
+% velocity DIM output is Ny x Nx x Nz; here Nz=1
+if ndims(resV.dim.v_x_f2) == 3
+    vX = resV.dim.v_x_f2(:,:,1);
+    vY = resV.dim.v_y_f2(:,:,1);
+    vZ = resV.dim.v_z_f2(:,:,1);
+else
+    vX = resV.dim.v_x_f2;
+    vY = resV.dim.v_y_f2;
+    vZ = resV.dim.v_z_f2;
+end
+
+% ultrasonic pressure field at f2 (same plane)
+if isfield(resP.dim,'X') && isfield(resP.dim,'Y')
+    Xp = resP.dim.X;
+    Yp = resP.dim.Y;
+else
+    [Xp, Yp] = meshgrid(resP.dim.x, resP.dim.y);
+end
+
+if ndims(resP.dim.p_f2) == 3
+    pU = resP.dim.p_f2(:,:,1);
+else
+    pU = resP.dim.p_f2;
+end
+
+Xpmm = 1e3 * Xp;
+Ypmm = 1e3 * Yp;
 
 Xmm = 1e3 * X;
 Ymm = 1e3 * Y;
@@ -300,7 +340,9 @@ if SAVE_MAT && ~isempty(SAVE_DIR)
 
     save(data_file, ...
         'medium','source','calc','obs_grid','meta', ...
-        'resV','X','Y','vX','vY','vZ','S','Vmag', ...
+        'resV','resP', ...
+        'X','Y','vX','vY','vZ','S','Vmag', ...
+        'Xp','Yp','pU', ...
         '-v7.3');
 
     fprintf('Saved MAT: %s\n', data_file);
@@ -464,6 +506,7 @@ lim_vy = [min(abs(vY(:))), max(abs(vY(:)))];
 lim_vz = [min(abs(vZ(:))), max(abs(vZ(:)))];
 lim_s  = [min(abs(S(:))),  max(abs(S(:)))];
 lim_v  = [min(Vmag(:)),    max(Vmag(:))];
+lim_p  = [min(abs(pU(:))), max(abs(pU(:)))];
 
 %% ============================================================
 % Fig0: |v| + quiver(Re{v_x,v_y})  AND  angle(vz)/pi
@@ -537,6 +580,13 @@ local_plot_mag_phase_cart(X, Y, S, 's=v\cdot v', z_use, source.f2, lim_s, lim_ph
 local_save_fig_png(gcf, sprintf('DIM_s_vdotv_magphase_spiral_z%.4f_l%d', z_use, l));
 
 local_save_fig_png(fig_source, sprintf('SourcePattern_%s', char(string(source.mode))));
+
+%% ============================================================
+% Pressure field (paper Fig.6-like): |p| and angle(p)/pi
+%% ============================================================
+local_plot_pressure_mag_phase_cart(Xp, Yp, pU, z_use, source.f2, lim_p, lim_ph);
+local_save_fig_png(gcf, sprintf('DIM_p_magphase_spiral_z%.4f_l%d', z_use, l));
+local_save_fig_fig(gcf, sprintf('DIM_p_magphase_spiral_z%.4f_l%d', z_use, l));
 
 %% ==================== local functions ====================
 
@@ -1179,4 +1229,55 @@ end
 function A = local_norm_rows(A)
 nn = sqrt(sum(A.^2,2));
 A = A ./ max(nn, eps);
+end
+
+function local_plot_pressure_mag_phase_cart(X, Y, P, z_use, f_hz, lim_mag, lim_ph)
+Xmm = 1e3 * X;
+Ymm = 1e3 * Y;
+zmm = 1e3 * z_use;
+
+figure('Color','w', 'Position',[100 100 1400 650], ...
+    'Name', sprintf('Pressure (DIM) @ z=%.3f mm', zmm));
+set(gcf,'Renderer','opengl');
+
+ax1 = subplot(1,2,1);
+surf(Xmm, Ymm, zeros(size(X)), abs(P), 'EdgeColor','none'); view(2);
+shading interp; colormap(ax1, MyColor('vik'));
+if all(isfinite(lim_mag)) && lim_mag(2) > lim_mag(1)
+    clim(lim_mag);
+end
+clb = colorbar;
+clb.Title.Interpreter = 'latex';
+clb.Title.String = '$|p|$';
+set(clb,'Fontsize',18);
+
+axis equal;
+xlim([min(Xmm(:)) max(Xmm(:))]);
+ylim([min(Ymm(:)) max(Ymm(:))]);
+set(gca,'linewidth',2,'TickLabelInterpreter','latex');
+fontsize(gca,22,'points');
+xlabel('$x$ (mm)','Interpreter','latex');
+ylabel('$y$ (mm)','Interpreter','latex');
+title(sprintf('Magnitude @ $z=%.3f$ mm', zmm), ...
+    'Interpreter','latex','Fontsize',18);
+
+ax2 = subplot(1,2,2);
+surf(Xmm, Ymm, zeros(size(X)), angle(P)/pi, 'EdgeColor','none'); view(2);
+shading flat; colormap(ax2, hsv); clim(lim_ph);
+clb = colorbar;
+clb.Title.Interpreter = 'latex';
+clb.Title.String = '$\angle p/\pi$';
+set(clb,'Fontsize',18);
+
+axis equal;
+xlim([min(Xmm(:)) max(Xmm(:))]);
+ylim([min(Ymm(:)) max(Ymm(:))]);
+set(gca,'linewidth',2,'TickLabelInterpreter','latex');
+fontsize(gca,22,'points');
+xlabel('$x$ (mm)','Interpreter','latex');
+ylabel('$y$ (mm)','Interpreter','latex');
+title('Phase', 'Interpreter','latex','Fontsize',18);
+
+sgtitle(sprintf('Ultrasonic pressure (DIM), $f=%.1f$ kHz, $z=%.3f$ mm', ...
+    f_hz/1e3, zmm), 'Interpreter','latex','Fontsize',18);
 end

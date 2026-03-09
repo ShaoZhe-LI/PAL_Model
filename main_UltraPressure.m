@@ -4,14 +4,18 @@
 % (1) xOz (from King/FHT): |p| and SPL on (x,z)
 % (2) xOy @ z≈1 m (from King/FHT): SPL and phase on (x,y)
 % via planar phase extension: p(x,y)=p(rho)*exp(j*m*phi)
+%
+% UPDATED FOR UNIFIED GRID INTERFACE:
+% - calc_ultrasound_field(..., obs_grid, method)
+% - KING/FHT always uses its own FHT grid
+% - DIM follows obs_grid.dim when obs_grid is provided
 % ============================================================
 
 clear; clc; close all;
 
-
 %% -------------------- save figures (GLOBAL control) --------------------
 global SAVE_PNG SAVE_DIR
-SAVE_PNG = false;   % <<< 全局开关：true 保存；false 不保存
+SAVE_PNG = true;   % <<< 全局开关：true 保存；false 不保存
 
 %% -------------------- medium --------------------
 medium.c0 = 343;
@@ -50,7 +54,6 @@ calc.dim.use_freq = 'f2';
 calc.dim.dis_coe = 16 * 1;
 calc.dim.margin = 1;
 calc.dim.src_discretization = 'polar';   % 'cart' (default) | 'polar'
-
 
 % --- King analytic spectrum stability ---
 calc.king.gspec_method = 'analytic'; % 'analytic' or 'transform'，优选前者
@@ -110,6 +113,9 @@ z_use = zK_full(iz);
 rho_ds = rho_full(1:ds:end);
 
 % Build observation grid for DIM
+% NOTE:
+% - variable name kept as obs_grid to avoid conflict with MATLAB grid()
+% - DIM will strictly follow obs_grid.dim because obs_grid is explicitly passed
 obs_grid.dim.x = rho_ds(:).';
 obs_grid.dim.y = 0;
 obs_grid.dim.z = z_use;
@@ -211,7 +217,7 @@ local_save_fig_png(gcf, sprintf('King_vs_DIM_1D_z%.2fm', z_use));
 
 fprintf('\n==================== SUMMARY ====================\n');
 fprintf('dim_method = %s\n', string(res.calc.dim.method));
-fprintf('z_target = %.1f m, z_use = %.2f m (nearest FHT grid)\n', z_target, z_use);
+fprintf('z_target = %.1f m, z_use = %.2f m (explicitly passed to obs_grid.dim.z)\n', z_target, z_use);
 fprintf('Total (both) time: %.3f s\n', tAll);
 fprintf('NOTE: memory readings may be NaN if OS API is unavailable.\n');
 
@@ -466,14 +472,12 @@ sgtitle(sprintf('$xOy$ Phase$/\\pi$ @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use,
 
 local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d', z_use, m_use));
 
-
-%%
+%% -------------------- radial spectral check --------------------
 xH = res.fht.xH;
 N_FHT = res.calc.fht.N_FHT;
 r_idx = 1:ds:N_FHT;
 G1_ana_plot = res.king.G1(r_idx,iz);
 Vs1 = res.king.Vs1;
-
 
 figure('Name','Radial');
 plot(xH(r_idx), abs(G1_ana_plot), 'LineWidth', 1.2);
@@ -529,7 +533,7 @@ xlabel('\rho (m)'); ylabel('|p| / max(|p|)');
 title(sprintf('Normalized magnitude (thr = %.0e)', thr));
 
 yl = ylim;
-hPatch = local_mark_segments_strong(segU, yl);  % <--- mark
+hPatch = local_mark_segments_strong(segU, yl);
 ylim(yl);
 
 legend([ ...
@@ -571,7 +575,6 @@ legend('Error','|p|/max < 1e-3','Location','best');
 % ---------- save with suffix ----------
 local_save_fig_png(fig2, sprintf('King_vs_DIM_1D_z%.2fm__norm', z_use));
 
-
 %% ============================================================
 % EXTRA FIGS (PHASE-FIX for FHT only; DIM unchanged)
 % 1) 1D compare (4 subplots): ONLY subplot(3) uses FHT phase-extrapolated
@@ -581,26 +584,26 @@ local_save_fig_png(fig2, sprintf('King_vs_DIM_1D_z%.2fm__norm', z_use));
 % NOTE: visualization only (m large -> near-axis low-|p| phase unreliable)
 % ============================================================
 
-thr_phase = thr;   % normalized amplitude threshold for phase fixing
-Lfit      = 200;    % linear-fit points used for inward extrapolation
-thr_u     = 5 * thr_phase;  % 倍数越大越平滑，越小越接近原值 3 5 10
+thr_phase = thr;
+Lfit      = 200; %#ok<NASGU>
+thr_u     = 5 * thr_phase;
 
 %% -------------------- (A) 1D: 4 subplots (ONLY phase of FHT is replaced) --------------------
-pK_raw = pK(:);           % King line (Nx1)
-pD_raw = pD(:);           % DIM line  (Nx1)
+pK_raw = pK(:);
+pD_raw = pD(:);
 
 % ONLY fix FHT phase
-pK_fix = local_phase_extrapolate_low_amp(pK_raw, rho_ds(:), thr_phase, thr_u); % King only
+pK_fix = local_phase_extrapolate_low_amp(pK_raw, rho_ds(:), thr_phase, thr_u);
 
 magK = abs(pK_raw);
 magD = abs(pD_raw);
 
 if fig.unwrap
-    phK_fix = unwrap(angle(pK_fix));   % fixed King phase
-    phD_raw = unwrap(angle(pD_raw));   % raw DIM phase (unchanged)
+    phK_fix = unwrap(angle(pK_fix));
+    phD_raw = unwrap(angle(pD_raw));
 else
-    phK_fix = (angle(pK_fix));   % fixed King phase
-    phD_raw = (angle(pD_raw));   % raw DIM phase (unchanged)
+    phK_fix = (angle(pK_fix));
+    phD_raw = (angle(pD_raw));
 end
 
 rel_err_log = log10( abs(pD_raw - pK_raw) ./ (abs(pK_raw) + eps0) );
@@ -636,9 +639,7 @@ title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
 
 local_save_fig_png(fig1_fix, sprintf('King_vs_DIM_1D_z%.2fm__FHTphaseExtrap', z_use));
 
-
 %% -------------------- (B) 2D: phase/pi compare (FHT fixed vs DIM raw) --------------------
-% Build rho_fig from rho_ds (NO interpolation), then crop to r_boundary
 rho_fig = rho_ds(:).';
 pK_line_raw = pK_raw(:).';
 pD_line_raw = pD_raw(:).';
@@ -650,15 +651,15 @@ pK_line_raw = pK_line_raw(1:idx_rb);
 pD_line_raw = pD_line_raw(1:idx_rb);
 
 % ONLY fix FHT radial line
-pK_line_fix = local_phase_extrapolate_low_amp(pK_line_raw, rho_fig, thr_phase, thr_u); % King only
+pK_line_fix = local_phase_extrapolate_low_amp(pK_line_raw, rho_fig, thr_phase, thr_u);
 
 % Polar grid -> Cartesian
 [TH, R] = meshgrid(theta_fig, rho_fig);
 [X, Y]  = pol2cart(TH, R);
 
 % Phase extension for vortex-m
-pK_2D_fix = (pK_line_fix(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH); % FHT fixed
-pD_2D_raw = (pD_line_raw(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH); % DIM raw
+pK_2D_fix = (pK_line_fix(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
+pD_2D_raw = (pD_line_raw(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
 
 PH_K = angle(pK_2D_fix)/pi;
 PH_D = angle(pD_2D_raw)/pi;
@@ -709,25 +710,11 @@ sgtitle(sprintf('$xOy$ Phase$/\\pi$ (FHT phase extrapolated only) @ $z=%.2f$ m, 
 
 local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d__FHTphaseExtrap', z_use, m_use));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 %% ==================== local functions ====================
 function mem_mb = local_get_mem_mb()
 % Returns MATLAB process memory usage in MB if possible; otherwise NaN.
 mem_mb = NaN;
 
-% Prefer Windows: use memory() for MATLAB process peak/usage
 if ispc
     try
         m = memory();
@@ -737,10 +724,9 @@ if ispc
     end
 end
 
-% macOS/Linux: Java heap usage (trend only, not full RSS)
 try
     rt = java.lang.Runtime.getRuntime();
-    used = double(rt.totalMemory() - rt.freeMemory()); % bytes
+    used = double(rt.totalMemory() - rt.freeMemory());
     mem_mb = used / (1024^2);
 catch
     mem_mb = NaN;
@@ -756,7 +742,6 @@ end
 end
 
 function local_save_fig_png(fig_handle, base_name)
-% Save current figure as PNG into SAVE_DIR when SAVE_PNG is true.
 global SAVE_PNG SAVE_DIR
 if isempty(SAVE_PNG) || ~SAVE_PNG
     return;
@@ -765,14 +750,11 @@ if isempty(SAVE_DIR) || ~exist(SAVE_DIR,'dir')
     return;
 end
 
-% sanitize filename (avoid illegal chars)
 fname = local_sanitize_filename(base_name);
 fp = fullfile(SAVE_DIR, [fname, '.png']);
 
-% ensure white background (optional)
 set(fig_handle, 'Color', 'w');
 
-% export (prefer exportgraphics if available)
 try
     exportgraphics(fig_handle, fp, 'Resolution', 300);
 catch
@@ -790,27 +772,21 @@ end
 end
 
 function local_write_runinfo_txt(save_dir, medium, source, calc, fig)
-% Write run configuration into a text file under save_dir.
-% Primary section: explicitly listed user parameters (fixed order)
-% Secondary section: auto-dump of remaining fields
-
 fp = fullfile(save_dir, 'run_info.txt');
 fid = fopen(fp, 'w');
 if fid < 0
     warning('Cannot create run_info.txt in %s', save_dir);
     return;
 end
-cleanupObj = onCleanup(@() fclose(fid));
+cleanupObj = onCleanup(@() fclose(fid)); %#ok<NASGU>
 
-written = struct();   % record written fields to avoid duplication
+written = struct();
 
 fprintf(fid, '===== RUN INFO =====\n');
 fprintf(fid, 'Time: %s\n\n', datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS'));
 
-%% =========================================================
 fprintf(fid, '===== PRIMARY PARAMETERS (USER SPECIFIED) =====\n\n');
 
-% -------------------- medium --------------------
 fprintf(fid, '%% -------------------- medium --------------------\n');
 fprintf(fid, 'medium.c0 = %.15g;\n', medium.c0);           written.medium.c0 = true;
 fprintf(fid, 'medium.rho0 = %.15g;\n', medium.rho0);       written.medium.rho0 = true;
@@ -825,7 +801,6 @@ if isfield(medium,'atten_handle')
 end
 fprintf(fid, '\n');
 
-% -------------------- source --------------------
 fprintf(fid, '%% -------------------- source --------------------\n');
 fprintf(fid, 'source.profile = ''%s'';\n', char(string(source.profile)));
 written.source.profile = true;
@@ -840,7 +815,6 @@ fprintf(fid, 'source.f1 = %.15g;\n', source.f1);           written.source.f1 = t
 fprintf(fid, 'source.fa = %.15g;\n', source.fa);           written.source.fa = true;
 fprintf(fid, '\n');
 
-% -------------------- calc.fht --------------------
 fprintf(fid, '%% -------------------- calc.fht --------------------\n');
 cf = calc.fht;
 fprintf(fid, 'calc.fht.N_FHT = %.15g;\n', cf.N_FHT);        written.calc.fht.N_FHT = true;
@@ -853,7 +827,6 @@ fprintf(fid, 'calc.fht.zu_max = %.15g;\n', cf.zu_max);      written.calc.fht.zu_
 fprintf(fid, 'calc.fht.za_max = %.15g;\n', cf.za_max);      written.calc.fht.za_max = true;
 fprintf(fid, '\n');
 
-% -------------------- calc.dim --------------------
 fprintf(fid, '%% -------------------- calc.dim --------------------\n');
 fprintf(fid, 'calc.dim.dis_coe = %.15g;\n', calc.dim.dis_coe);
 written.calc.dim.dis_coe = true;
@@ -863,7 +836,6 @@ fprintf(fid, 'calc.dim.src_discretization = ''%s'';\n', ...
 written.calc.dim.src_discretization = true;
 fprintf(fid, '\n');
 
-% -------------------- calc.king --------------------
 fprintf(fid, '%% -------------------- calc.king --------------------\n');
 fprintf(fid, 'calc.king.gspec_method = ''%s'';\n', ...
     char(string(calc.king.gspec_method)));
@@ -874,14 +846,11 @@ fprintf(fid, 'calc.king.band_refine.enable = %s;\n', ...
 written.calc.king.band_refine.enable = true;
 fprintf(fid, '\n');
 
-% -------------------- fig --------------------
 fprintf(fid, '%% -------------------- fig --------------------\n');
 fprintf(fid, 'fig.unwrap = %s;\n', local_bool_str(fig.unwrap));
 fprintf(fid, '\n');
 
 fprintf(fid, '\n');
-
-%% =========================================================
 fprintf(fid, '===== SECONDARY PARAMETERS (AUTO DUMP) =====\n\n');
 
 local_dump_struct(fid, medium, 'medium', written);
@@ -896,7 +865,6 @@ fn = fieldnames(S);
 for i = 1:numel(fn)
     f = fn{i};
 
-    % skip already written fields
     if isfield(written, prefix) && isfield(written.(prefix), f)
         continue;
     end
@@ -927,7 +895,6 @@ end
 end
 
 function seg = local_mask_to_segments(x, mask)
-% seg: Kx2 array, each row [xL xR] for contiguous true regions
 mask = mask(:);
 x = x(:);
 if numel(mask) ~= numel(x)
@@ -945,9 +912,6 @@ end
 end
 
 function h = local_mark_segments_strong(seg, yl)
-% Dark, visible shading for low-amplitude regions
-% Returns patch handles for legend use
-
 h = gobjects(0);
 if isempty(seg), return; end
 
@@ -958,32 +922,17 @@ for k = 1:size(seg,1)
     h(end+1) = patch( ...
         [xL xR xR xL], ...
         [yl(1) yl(1) yl(2) yl(2)], ...
-        [0.65 0.65 0.65], ...   % darker gray
+        [0.65 0.65 0.65], ...
         'EdgeColor','none', ...
-        'FaceAlpha',0.45);      %#ok<AGROW>
+        'FaceAlpha',0.45); %#ok<AGROW>
 end
 end
 
 function p_out = local_phase_extrapolate_low_amp(p_in, rho, thr, thr_u)
-% Scheme A (recommended):
-% - Build extrapolated phase using PCHIP on reliable region (|p|/max >= thr)
-% - Replace low-amplitude phase by extrapolated phase
-% - Use smooth blending in [thr, thr_u] to avoid a kink at the boundary
-% - Magnitude is unchanged (visualization only)
-%
-% Inputs:
-%   p_in  : complex vector (Nx1 or 1xN)
-%   rho   : real vector (same length as p_in)
-%   thr   : normalized threshold (e.g., 1e-3)
-%   thr_u : upper threshold for blending (e.g., 5e-3). If omitted, thr_u=5*thr
-%
-% Output:
-%   p_out : same size as p_in, magnitude unchanged, phase modified near axis
-
 if nargin < 4 || isempty(thr_u)
     thr_u = 5*thr;
 end
-thr_u = max(thr_u, thr*(1+1e-12));  % ensure thr_u > thr
+thr_u = max(thr_u, thr*(1+1e-12));
 
 p = p_in(:);
 r = rho(:);
@@ -1000,19 +949,14 @@ if ~(isfinite(Amax)) || Amax <= 0
 end
 an = A / Amax;
 
-% unwrap phase from raw complex data
 phi_raw = unwrap(angle(p));
 
-% reliable indices
 I = find(an >= thr);
 if numel(I) < 10
-    % not enough support for a stable pchip
     p_out = p_in;
     return;
 end
 
-% ensure r is strictly increasing for pchip (it should be in your FHT grid)
-% if not, sort (robust)
 if any(diff(r) <= 0)
     [rS, idxS] = sort(r);
     pS = p(idxS);
@@ -1024,29 +968,19 @@ if any(diff(r) <= 0)
         p_out = p_in; return;
     end
     phi_ext_S = pchip(rS(IS), phiS(IS), rS);
-    % blending weights on sorted grid
     wS = (anS - thr) / (thr_u - thr);
     wS = min(max(wS, 0), 1);
     phi_new_S = (1-wS).*phi_ext_S + wS.*phiS;
     p2S = AS .* exp(1j*phi_new_S);
-    % unsort back
     p2 = zeros(size(p2S));
     p2(idxS) = p2S;
 else
-    % extrapolated phase from reliable points (shape-preserving)
     phi_ext = pchip(r(I), phi_raw(I), r);
-
-    % blending weights
     w = (an - thr) / (thr_u - thr);
     w = min(max(w, 0), 1);
-
-    % phase mix: low amp -> extrapolated, high amp -> raw
     phi_new = (1-w).*phi_ext + w.*phi_raw;
-
-    % rebuild with same magnitude
     p2 = A .* exp(1j*phi_new);
 end
 
-% restore original shape
 p_out = reshape(p2, size(p_in));
 end
