@@ -2,7 +2,7 @@
 % MAIN: DIM-only spiral-source (paper-like) velocity @ z = z_obs
 % - Source: circular spiral binary phase grating (0/pi) as vibrating surface
 % - Requires: make_source_velocity.m  (supports source.custom_vn_xy_handle_1/2)
-% - Calls:    calc_ultrasound_velocity_field(..., obs_grid, 'dim')
+% - Calls:    calc_ultrasound_velocity_field(..., obs_grid_v, 'dim')
 %
 % Figures:
 %   Fig0: |v| + quiver(Re{vx,vy})   AND   angle(vz)/pi
@@ -16,6 +16,11 @@
 %   - compute major-axis direction (3D) and fix sign by instantaneous velocity at phase phi_sign
 %   - build two closed contours (C1: enclose 1 point, C2: enclose selected points)
 %   - plot 3D bi-vectors (double-ended arrows) using quiver3 on the plane z=z_use
+%
+% + (ADDED) Pressure field:
+%   - DIM ultrasonic pressure p at the same z_use
+%   - pressure observation plane is 3x larger in side length than velocity plane
+%   - plot |p| and angle(p)/pi and save
 %
 % Colormap:
 %   - magnitude: vik + shading interp
@@ -72,7 +77,7 @@ source.m_custom = 0;
 %   'triangle_normal' : 三角形
 source.mode = 'triangle_normal';
 
-% wavelength at f1
+% wavelength at f1/f2
 lambda1 = medium.c0 / source.f2;
 
 % grating parameters
@@ -90,7 +95,7 @@ handed = +1;
 
 % ===== Bessel/OAM order (YOU CHANGE THIS) =====
 l = 1;     % <<<<<< 改这里：1/2/3/...  贝塞尔阶数（拓扑荷）
-r_boundary_coef = 1.2;  % 2D图像范围
+r_boundary_coef = 1.75;  % 2D图像范围（速度场）
 r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
 qk_vec = 1:10;
@@ -236,40 +241,58 @@ dx_obs = half_width / 32;
 x_obs = -r_boundary:dx_obs:r_boundary;
 y_obs = -r_boundary:dx_obs:r_boundary;
 
-% grid for BOTH calc_ultrasound_velocity_field and calc_ultrasound_field
-obs_grid = struct();
-obs_grid.dim = struct();
-obs_grid.dim.x = x_obs;
-obs_grid.dim.y = y_obs;
-obs_grid.dim.z = z_use;
-obs_grid.dim.block_size     = calc.dim.block_size;
-obs_grid.dim.src_block_size = calc.dim.src_block_size;
+% velocity-field observation grid (unchanged)
+obs_grid_v = struct();
+obs_grid_v.dim = struct();
+obs_grid_v.dim.x = x_obs;
+obs_grid_v.dim.y = y_obs;
+obs_grid_v.dim.z = z_use;
+obs_grid_v.dim.block_size     = calc.dim.block_size;
+obs_grid_v.dim.src_block_size = calc.dim.src_block_size;
+
+% pressure-field observation grid: 3x larger side length
+press_range_scale = 3;
+r_boundary_p = press_range_scale * r_boundary;
+dx_obs_p     = dx_obs;   % keep same sampling step
+
+x_obs_p = -r_boundary_p:dx_obs_p:r_boundary_p;
+y_obs_p = -r_boundary_p:dx_obs_p:r_boundary_p;
+
+obs_grid_p = struct();
+obs_grid_p.dim = struct();
+obs_grid_p.dim.x = x_obs_p;
+obs_grid_p.dim.y = y_obs_p;
+obs_grid_p.dim.z = z_use;
+obs_grid_p.dim.block_size     = calc.dim.block_size;
+obs_grid_p.dim.src_block_size = calc.dim.src_block_size;
 
 %% ============================================================
-% Compute (DIM ONLY) + timing/memory
+% Compute velocity field (DIM ONLY) + timing/memory
 %% ============================================================
 fprintf('\n==================== DIM VELOCITY (SPIRAL SOURCE) ====================\n');
 fprintf('order l=%d, handed=%+d\n', l, handed);
 fprintf('f1=%.1f kHz, f2=%.1f kHz, lambda1=%.4g m\n', source.f1/1e3, source.f2/1e3, lambda1);
 fprintf('Spiral: M=%d, r0=%.3g m, P=%.3g m, dP=%.3g m, a=%.3g m\n', M, r0, P, dP, source.a);
 fprintf('z_target=%.6f m, z_use=%.6f m\n', z_target, z_use);
-fprintf('obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
+fprintf('velocity obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
     numel(x_obs), numel(y_obs), dx_obs, r_boundary);
 
 mem0 = get_mem_mb(); t0 = tic;
-resV = calc_ultrasound_velocity_field(source, medium, calc, obs_grid, 'dim');
+resV = calc_ultrasound_velocity_field(source, medium, calc, obs_grid_v, 'dim');
 tAll = toc(t0); mem1 = get_mem_mb();
 
-fprintf('DIM time: %.3f s\n', tAll);
-fprintf('DIM memory: start %s, end %s, delta %s\n', fmt_mem(mem0), fmt_mem(mem1), fmt_mem(mem1-mem0));
+fprintf('DIM velocity time: %.3f s\n', tAll);
+fprintf('DIM velocity memory: start %s, end %s, delta %s\n', fmt_mem(mem0), fmt_mem(mem1), fmt_mem(mem1-mem0));
 
 %% ============================================================
 % Compute ultrasonic pressure field (DIM ONLY, same z_use)
 %% ============================================================
 fprintf('\n==================== DIM PRESSURE (SPIRAL SOURCE) ====================\n');
+fprintf('pressure obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
+    numel(x_obs_p), numel(y_obs_p), dx_obs_p, r_boundary_p);
 
 memP0 = get_mem_mb(); tP0 = tic;
-resP = calc_ultrasound_field(source, medium, calc, obs_grid, 'dim');
+resP = calc_ultrasound_field(source, medium, calc, obs_grid_p, 'dim');
 tP = toc(tP0); memP1 = get_mem_mb();
 
 fprintf('DIM pressure time: %.3f s\n', tP);
@@ -291,7 +314,7 @@ else
     vZ = resV.dim.v_z_f2;
 end
 
-% ultrasonic pressure field at f2 (same plane)
+% ultrasonic pressure field at f2
 if isfield(resP.dim,'X') && isfield(resP.dim,'Y')
     Xp = resP.dim.X;
     Yp = resP.dim.Y;
@@ -312,8 +335,10 @@ Xmm = 1e3 * X;
 Ymm = 1e3 * Y;
 z0mm = 1e3 * z_use;
 
-fprintf('X range = [%.3f, %.3f] mm\n', min(Xmm(:)), max(Xmm(:)));
-fprintf('Y range = [%.3f, %.3f] mm\n', min(Ymm(:)), max(Ymm(:)));
+fprintf('Velocity X range = [%.3f, %.3f] mm\n', min(Xmm(:)), max(Xmm(:)));
+fprintf('Velocity Y range = [%.3f, %.3f] mm\n', min(Ymm(:)), max(Ymm(:)));
+fprintf('Pressure X range = [%.3f, %.3f] mm\n', min(Xpmm(:)), max(Xpmm(:)));
+fprintf('Pressure Y range = [%.3f, %.3f] mm\n', min(Ypmm(:)), max(Ypmm(:)));
 
 S    = vX.^2 + vY.^2 + vZ.^2;
 Vmag = sqrt(abs(vX).^2 + abs(vY).^2 + abs(vZ).^2);
@@ -323,23 +348,33 @@ if SAVE_MAT && ~isempty(SAVE_DIR)
     data_file = fullfile(SAVE_DIR, 'resV_spiral_DIM.mat');
 
     meta = struct();
-    meta.time_str   = datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS');
-    meta.l          = l;
-    meta.handed     = handed;
-    meta.M          = M;
-    meta.r0         = r0;
-    meta.P          = P;
-    meta.dP         = dP;
-    meta.z_target   = z_target;
-    meta.z_use      = z_use;
-    meta.dx_obs     = dx_obs;
-    meta.r_boundary = r_boundary;
-    meta.tAll       = tAll;
-    meta.mem0_MB    = mem0;
-    meta.mem1_MB    = mem1;
+    meta.time_str     = datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS');
+    meta.l            = l;
+    meta.handed       = handed;
+    meta.M            = M;
+    meta.r0           = r0;
+    meta.P            = P;
+    meta.dP           = dP;
+    meta.z_target     = z_target;
+    meta.z_use        = z_use;
+
+    meta.dx_obs_v     = dx_obs;
+    meta.r_boundary_v = r_boundary;
+
+    meta.press_range_scale = press_range_scale;
+    meta.dx_obs_p     = dx_obs_p;
+    meta.r_boundary_p = r_boundary_p;
+
+    meta.t_vel        = tAll;
+    meta.mem0_vel_MB  = mem0;
+    meta.mem1_vel_MB  = mem1;
+
+    meta.t_pres       = tP;
+    meta.mem0_pres_MB = memP0;
+    meta.mem1_pres_MB = memP1;
 
     save(data_file, ...
-        'medium','source','calc','obs_grid','meta', ...
+        'medium','source','calc','obs_grid_v','obs_grid_p','meta', ...
         'resV','resP', ...
         'X','Y','vX','vY','vZ','S','Vmag', ...
         'Xp','Yp','pU', ...
@@ -587,6 +622,140 @@ local_save_fig_png(fig_source, sprintf('SourcePattern_%s', char(string(source.mo
 local_plot_pressure_mag_phase_cart(Xp, Yp, pU, z_use, source.f2, lim_p, lim_ph);
 local_save_fig_png(gcf, sprintf('DIM_p_magphase_spiral_z%.4f_l%d', z_use, l));
 local_save_fig_fig(gcf, sprintf('DIM_p_magphase_spiral_z%.4f_l%d', z_use, l));
+
+%% ============================================================
+% Fig.8-like simulation: (a) direction map, (b) sphere coverage
+% Style follows the paper:
+%   - hue   -> azimuth / longitude
+%   - light-dark -> polar angle / latitude
+%   - rectangular horizontal cells
+%% ============================================================
+do_fig8_like = true;
+
+if do_fig8_like
+    % ------------------------------------------------------------
+    % fixed-time instantaneous velocity field: Re{ v * exp(-j*phi_t) }
+    % Paper uses a fixed t and z. Start with phi_t = 0.
+    % ------------------------------------------------------------
+    phi_t = 0;
+
+    ux = real(vX .* exp(-1j*phi_t));
+    uy = real(vY .* exp(-1j*phi_t));
+    uz = real(vZ .* exp(-1j*phi_t));
+
+    umag = sqrt(ux.^2 + uy.^2 + uz.^2);
+    mask_valid = umag > 1e-12;
+
+    nx = nan(size(ux));
+    ny = nan(size(uy));
+    nz = nan(size(uz));
+
+    nx(mask_valid) = ux(mask_valid) ./ umag(mask_valid);
+    ny(mask_valid) = uy(mask_valid) ./ umag(mask_valid);
+    nz(mask_valid) = uz(mask_valid) ./ umag(mask_valid);
+
+    % spherical angles of direction
+    az = atan2(ny, nx);                           % longitude in [-pi, pi]
+    lat = asin(max(-1, min(1, nz)));             % latitude  in [-pi/2, pi/2]
+
+    % color-coded direction map
+    RGBdir = local_dirfield_to_rgb(az, lat);
+
+    % ------------------------------------------------------------
+    % choose one horizontal rectangular cell near the center
+    % matching the paper style more closely than a square cell
+    % ------------------------------------------------------------
+    x_min = min(X(:)); x_max = max(X(:));
+    y_min = min(Y(:)); y_max = max(Y(:));
+
+    Lx = x_max - x_min;
+    Ly = y_max - y_min;
+
+    % horizontal-row style subdivision
+    n_rows = 4;
+    y_edges = linspace(y_min, y_max, n_rows+1);
+
+    % choose middle row
+    row_id = 2;
+    y1c = y_edges(row_id);
+    y2c = y_edges(row_id+1);
+
+    % choose one centered rectangular section in x
+    cell_w = 0.28 * Lx;
+    xc = 0.5 * (x_min + x_max);
+    x1c = xc - 0.5 * cell_w;
+    x2c = xc + 0.5 * cell_w;
+
+    mask_cell = (X >= x1c) & (X <= x2c) & (Y >= y1c) & (Y <= y2c) & mask_valid;
+
+    % ------------------------------------------------------------
+    % Figure: two panels
+    % ------------------------------------------------------------
+    fig8 = figure('Color','w', 'Position',[120 120 1320 620], ...
+        'Name', sprintf('Fig8-like simulation @ z=%.3f mm', z0mm));
+    tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+    % ===================== (a) planar direction map =====================
+    nexttile;
+    image('XData',[min(Xmm(:)) max(Xmm(:))], ...
+          'YData',[min(Ymm(:)) max(Ymm(:))], ...
+          'CData', RGBdir);
+    set(gca,'YDir','normal');
+    hold on; box on;
+
+    % horizontal white subdivision lines (paper-like guide)
+    for iy = 2:numel(y_edges)-1
+        plot(1e3*[x_min x_max], 1e3*[y_edges(iy) y_edges(iy)], ...
+            'w-', 'LineWidth', 1.0);
+    end
+
+    % selected rectangular cell
+    rectangle('Position', 1e3*[x1c, y1c, x2c-x1c, y2c-y1c], ...
+        'EdgeColor','w', 'LineWidth',1.8, 'LineStyle','-');
+
+    axis equal tight;
+    xlim([min(Xmm(:)) max(Xmm(:))]);
+    ylim([min(Ymm(:)) max(Ymm(:))]);
+    set(gca,'LineWidth',1.5,'TickLabelInterpreter','latex');
+    fontsize(gca,20,'points');
+    xlabel('$x$','Interpreter','latex');
+    ylabel('$y$','Interpreter','latex');
+    title('(a)', 'Interpreter','latex','FontSize',18);
+
+    % ===================== (b) sphere coverage =====================
+    nexttile; hold on; box on;
+
+    [Xsph, Ysph, Zsph] = sphere(120);
+    surf(Xsph, Ysph, Zsph, ...
+        'FaceColor',[0.88 0.88 0.88], ...
+        'EdgeColor',[0.75 0.75 0.75], ...
+        'FaceAlpha',0.12, 'EdgeAlpha',0.12);
+
+    nx_cell = nx(mask_cell);
+    ny_cell = ny(mask_cell);
+    nz_cell = nz(mask_cell);
+
+    az_cell  = atan2(ny_cell, nx_cell);
+    lat_cell = asin(max(-1, min(1, nz_cell)));
+    rgb_cell = local_dirpts_to_rgb(az_cell, lat_cell);
+
+    scatter3(nx_cell, ny_cell, nz_cell, 16, rgb_cell, 'filled', ...
+        'MarkerEdgeColor','none');
+
+    axis equal;
+    xlim([-1 1]); ylim([-1 1]); zlim([-1 1]);
+    view(30,22);
+    set(gca,'LineWidth',1.5,'TickLabelInterpreter','latex');
+    fontsize(gca,18,'points');
+    xlabel('$x$','Interpreter','latex');
+    ylabel('$y$','Interpreter','latex');
+    zlabel('$z$','Interpreter','latex');
+    title('(b)', 'Interpreter','latex','FontSize',18);
+
+    local_save_fig_png(gcf, sprintf('DIM_Fig8ab_direction_skyrmion_z%.4f_l%d', z_use, l));
+    local_save_fig_fig(gcf, sprintf('DIM_Fig8ab_direction_skyrmion_z%.4f_l%d', z_use, l));
+end
+
 
 %% ==================== local functions ====================
 
@@ -1017,6 +1186,8 @@ fprintf(fid, '%% calc.dim\n');
 cd = calc.dim;
 fprintf(fid, 'use_freq=''%s''; dis_coe=%.15g; margin=%.15g; src_discretization=''%s'';\n', ...
     char(string(cd.use_freq)), cd.dis_coe, cd.margin, char(string(cd.src_discretization)));
+fprintf(fid, 'dim_method=''%s''; use_parallel=%s; num_workers=%d;\n\n', ...
+    char(string(cd.method)), local_bool_str(cd.use_parallel), cd.num_workers);
 
 fprintf(fid, '\n%% fig\n');
 fprintf(fid, 'fig.unwrap=%s;\n', local_bool_str(fig.unwrap));
@@ -1280,4 +1451,35 @@ title('Phase', 'Interpreter','latex','Fontsize',18);
 
 sgtitle(sprintf('Ultrasonic pressure (DIM), $f=%.1f$ kHz, $z=%.3f$ mm', ...
     f_hz/1e3, zmm), 'Interpreter','latex','Fontsize',18);
+end
+
+function RGB = local_dirfield_to_rgb(az, lat)
+% Paper-like direction coloring:
+%   hue        -> azimuth / longitude
+%   brightness -> latitude (light-dark)
+%
+% az  in [-pi, pi]
+% lat in [-pi/2, pi/2]
+
+h = mod(az + pi, 2*pi) / (2*pi);          % [0,1]
+v = 0.25 + 0.75 * (lat + pi/2) / pi;      % darker -> lower latitude, brighter -> higher
+s = 0.95 * ones(size(h));
+
+HSV = cat(3, h, s, v);
+RGB = hsv2rgb(HSV);
+
+bad = ~isfinite(az) | ~isfinite(lat);
+for k = 1:3
+    tmp = RGB(:,:,k);
+    tmp(bad) = 1;
+    RGB(:,:,k) = tmp;
+end
+end
+
+function rgb = local_dirpts_to_rgb(az, lat)
+h = mod(az + pi, 2*pi) / (2*pi);
+v = 0.25 + 0.75 * (lat + pi/2) / pi;
+s = 0.95 * ones(size(h));
+
+rgb = hsv2rgb([h(:), s(:), v(:)]);
 end
