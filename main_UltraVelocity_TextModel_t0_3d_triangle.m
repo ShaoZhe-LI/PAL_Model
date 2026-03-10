@@ -624,6 +624,136 @@ local_save_fig_png(gcf, sprintf('DIM_p_magphase_spiral_z%.4f_l%d', z_use, l));
 local_save_fig_fig(gcf, sprintf('DIM_p_magphase_spiral_z%.4f_l%d', z_use, l));
 
 %% ============================================================
+% Fig-like: oblique 3D view of velocity-direction distribution
+% - arrows lie on the observation plane z=z_use
+% - arrow direction: in-plane components of normalized instantaneous velocity
+% - arrow color    : n_z
+%% ============================================================
+do_plane_dirvec = true;
+
+if do_plane_dirvec
+    % ---------------- user params ----------------
+    phi_t_dir   = 0;        % instantaneous phase
+    qstep_dir   = 1;        % denser arrows
+    qscale_dir  = 0.42;     % arrow length
+    head_dir    = 0.95;     % arrow head size
+    linew_dir   = 0.9;      % arrow line width
+
+    use_mask_r  = false;    % circular crop if needed
+    mask_r_coef = 0.95;
+
+    zplane_mm   = 1e3 * z_use;
+    z_lift_mm   = 0.00;     % arrow base lift above plane, mm
+    view_az_el  = [42, 28]; % oblique view, like paper style
+
+    % ---------------- instantaneous real velocity ----------------
+    ux = real(vX .* exp(-1j*phi_t_dir));
+    uy = real(vY .* exp(-1j*phi_t_dir));
+    uz = real(vZ .* exp(-1j*phi_t_dir));
+
+    umag = sqrt(ux.^2 + uy.^2 + uz.^2);
+    mask_valid = umag > 1e-12;
+
+    nx = nan(size(ux));
+    ny = nan(size(uy));
+    nz = nan(size(uz));
+
+    nx(mask_valid) = ux(mask_valid) ./ umag(mask_valid);
+    ny(mask_valid) = uy(mask_valid) ./ umag(mask_valid);
+    nz(mask_valid) = uz(mask_valid) ./ umag(mask_valid);
+
+    if use_mask_r
+        rr = hypot(X, Y);
+        mask_valid = mask_valid & (rr <= mask_r_coef * max(rr(:)));
+        nx(~mask_valid) = nan;
+        ny(~mask_valid) = nan;
+        nz(~mask_valid) = nan;
+    end
+
+    % ---------------- downsample ----------------
+    Xq  = X(1:qstep_dir:end, 1:qstep_dir:end);
+    Yq  = Y(1:qstep_dir:end, 1:qstep_dir:end);
+    nxq = nx(1:qstep_dir:end, 1:qstep_dir:end);
+    nyq = ny(1:qstep_dir:end, 1:qstep_dir:end);
+    nzq = nz(1:qstep_dir:end, 1:qstep_dir:end);
+
+    ok = isfinite(Xq) & isfinite(Yq) & isfinite(nxq) & isfinite(nyq) & isfinite(nzq);
+
+    xq = Xq(ok);
+    yq = Yq(ok);
+    uq = nxq(ok);
+    vq = nyq(ok);
+    cq = nzq(ok);
+
+    xq_mm = 1e3 * xq;
+    yq_mm = 1e3 * yq;
+    zq_mm = (zplane_mm + z_lift_mm) * ones(size(xq_mm));
+
+    % ---------------- colormap from n_z only ----------------
+    cmap_dir = turbo(256);
+    cidx = round(1 + (size(cmap_dir,1)-1) * (cq + 1)/2);
+    cidx = max(1, min(size(cmap_dir,1), cidx));
+
+    % ---------------- figure ----------------
+    figure('Color','w', 'Position',[120 120 1200 820], ...
+        'Name', sprintf('Oblique velocity-direction map @ z=%.3f mm', zplane_mm));
+    hold on; box on;
+
+    % ---- faint observation plane ----
+    surf(1e3*X, 1e3*Y, zplane_mm*ones(size(X)), ...
+        zeros(size(X)), ...
+        'EdgeColor','none', ...
+        'FaceColor',[0.94 0.94 0.94], ...
+        'FaceAlpha',0.20);
+
+    % ---- colored arrows (color only by n_z) ----
+    for k = 1:numel(xq_mm)
+        quiver3(xq_mm(k), yq_mm(k), zq_mm(k), ...
+            uq(k), vq(k), 0, qscale_dir, ...
+            'Color', cmap_dir(cidx(k),:), ...
+            'LineWidth', linew_dir, ...
+            'MaxHeadSize', head_dir);
+    end
+
+    % ---- axes / view ----
+    axis equal;
+    xlim(1e3*[min(X(:)) max(X(:))]);
+    ylim(1e3*[min(Y(:)) max(Y(:))]);
+
+    xr = 1e3 * range(X(:));
+    yr = 1e3 * range(Y(:));
+    zr = max(xr, yr);
+    zlim(zplane_mm + [-0.18 0.18] * zr);
+
+    view(view_az_el(1), view_az_el(2));
+
+    set(gca,'LineWidth',1.5,'TickLabelInterpreter','latex');
+    fontsize(gca,20,'points');
+    xlabel('$x$ (mm)','Interpreter','latex');
+    ylabel('$y$ (mm)','Interpreter','latex');
+    zlabel('$z$ (mm)','Interpreter','latex');
+
+    title(sprintf('Normalized velocity-direction field at $z=%.3f$ mm', zplane_mm), ...
+        'Interpreter','latex','FontSize',18);
+
+    % ---- colorbar for n_z ----
+    colormap(cmap_dir);
+    clim([-1 1]);
+    cb = colorbar;
+    cb.Ticks = [-1 1];
+    cb.TickLabels = {'-max','max'};
+    cb.Label.String = '$n_z$';
+    cb.Label.Interpreter = 'latex';
+    cb.TickLabelInterpreter = 'latex';
+
+    grid on;
+
+    local_save_fig_png(gcf, sprintf('DIM_plane_dirvec_oblique_z%.4f_l%d', z_use, l));
+    local_save_fig_fig(gcf, sprintf('DIM_plane_dirvec_oblique_z%.4f_l%d', z_use, l));
+end
+
+
+%% ============================================================
 % Fig.8(a)(b)-like THEORETICAL skyrmion plots from ideal 3-plane-wave model
 % Paper style:
 %   - fixed t and z
