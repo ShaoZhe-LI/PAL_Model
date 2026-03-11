@@ -100,6 +100,20 @@ r_small_k = 4;          % 小圆
 r_large_k = 16;         % 大圆
 qk_vec = 1:10;
 
+%% ============================================================
+% Observation plane range (paper-like: scale ~ lambda)
+%% ============================================================
+
+% ---- range mode ----
+use_custom_obs_range = true;   % true: 用自定义范围; false: 保持原来的对称 r_boundary 范围
+
+% ---- custom ranges (unit: m) ----
+xlim_v_custom = [-3.0e-3,  5.0e-3];
+ylim_v_custom = [-6.0e-3,  3.0e-3];
+
+xlim_p_custom = [-2.6e-3, 11.8e-3];
+ylim_p_custom = [-9.0e-3,  5.1e-3];
+
 if strcmp(source.mode,'triangle_normal')
     source.f1   = 68e3;
     source.fa   = 2e3;
@@ -238,10 +252,33 @@ half_width = 0.5 * lambda1;
 r_boundary = r_boundary_coef * half_width;
 dx_obs = half_width / 32;
 
-x_obs = -r_boundary:dx_obs:r_boundary;
-y_obs = -r_boundary:dx_obs:r_boundary;
+if use_custom_obs_range
+    % ---- custom velocity-field observation grid ----
+    x_obs = xlim_v_custom(1):dx_obs:xlim_v_custom(2);
+    y_obs = ylim_v_custom(1):dx_obs:ylim_v_custom(2);
 
-% velocity-field observation grid (unchanged)
+    % ---- custom pressure-field observation grid ----
+    dx_obs_p = dx_obs;   % keep same spacing as before
+    x_obs_p = xlim_p_custom(1):dx_obs_p:xlim_p_custom(2);
+    y_obs_p = ylim_p_custom(1):dx_obs_p:ylim_p_custom(2);
+
+    % keep variables for compatibility / logging
+    r_boundary_p = NaN;
+    press_range_scale = NaN;
+else
+    % ---- original symmetric ranges ----
+    x_obs = -r_boundary:dx_obs:r_boundary;
+    y_obs = -r_boundary:dx_obs:r_boundary;
+
+    press_range_scale = 3;
+    r_boundary_p = press_range_scale * r_boundary;
+    dx_obs_p     = dx_obs;   % keep same sampling step
+
+    x_obs_p = -r_boundary_p:dx_obs_p:r_boundary_p;
+    y_obs_p = -r_boundary_p:dx_obs_p:r_boundary_p;
+end
+
+% velocity-field observation grid
 obs_grid_v = struct();
 obs_grid_v.dim = struct();
 obs_grid_v.dim.x = x_obs;
@@ -250,14 +287,7 @@ obs_grid_v.dim.z = z_use;
 obs_grid_v.dim.block_size     = calc.dim.block_size;
 obs_grid_v.dim.src_block_size = calc.dim.src_block_size;
 
-% pressure-field observation grid: 3x larger side length
-press_range_scale = 3;
-r_boundary_p = press_range_scale * r_boundary;
-dx_obs_p     = dx_obs;   % keep same sampling step
-
-x_obs_p = -r_boundary_p:dx_obs_p:r_boundary_p;
-y_obs_p = -r_boundary_p:dx_obs_p:r_boundary_p;
-
+% pressure-field observation grid
 obs_grid_p = struct();
 obs_grid_p.dim = struct();
 obs_grid_p.dim.x = x_obs_p;
@@ -265,6 +295,25 @@ obs_grid_p.dim.y = y_obs_p;
 obs_grid_p.dim.z = z_use;
 obs_grid_p.dim.block_size     = calc.dim.block_size;
 obs_grid_p.dim.src_block_size = calc.dim.src_block_size;
+
+% ---- record observation-grid info into extra ----
+extra.use_custom_obs_range = use_custom_obs_range;
+extra.z_use   = z_use;
+
+extra.xlim_v  = [x_obs(1),   x_obs(end)];
+extra.ylim_v  = [y_obs(1),   y_obs(end)];
+extra.xlim_p  = [x_obs_p(1), x_obs_p(end)];
+extra.ylim_p  = [y_obs_p(1), y_obs_p(end)];
+
+extra.Nx_v = numel(x_obs);
+extra.Ny_v = numel(y_obs);
+extra.Nx_p = numel(x_obs_p);
+extra.Ny_p = numel(y_obs_p);
+
+if numel(x_obs) >= 2,   extra.dx_obs_v = x_obs(2)   - x_obs(1);   else, extra.dx_obs_v = NaN; end
+if numel(y_obs) >= 2,   extra.dy_obs_v = y_obs(2)   - y_obs(1);   else, extra.dy_obs_v = NaN; end
+if numel(x_obs_p) >= 2, extra.dx_obs_p = x_obs_p(2) - x_obs_p(1); else, extra.dx_obs_p = NaN; end
+if numel(y_obs_p) >= 2, extra.dy_obs_p = y_obs_p(2) - y_obs_p(1); else, extra.dy_obs_p = NaN; end
 
 %% ============================================================
 % Compute velocity field (DIM ONLY) + timing/memory
@@ -274,8 +323,13 @@ fprintf('order l=%d, handed=%+d\n', l, handed);
 fprintf('f1=%.1f kHz, f2=%.1f kHz, lambda1=%.4g m\n', source.f1/1e3, source.f2/1e3, lambda1);
 fprintf('Spiral: M=%d, r0=%.3g m, P=%.3g m, dP=%.3g m, a=%.3g m\n', M, r0, P, dP, source.a);
 fprintf('z_target=%.6f m, z_use=%.6f m\n', z_target, z_use);
-fprintf('velocity obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
-    numel(x_obs), numel(y_obs), dx_obs, r_boundary);
+if use_custom_obs_range
+    fprintf('velocity obs grid: Nx=%d, Ny=%d, dx=%.4g m, x=[%.4g, %.4g] m, y=[%.4g, %.4g] m\n', ...
+        numel(x_obs), numel(y_obs), dx_obs, x_obs(1), x_obs(end), y_obs(1), y_obs(end));
+else
+    fprintf('velocity obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
+        numel(x_obs), numel(y_obs), dx_obs, r_boundary);
+end
 
 mem0 = get_mem_mb(); t0 = tic;
 resV = calc_ultrasound_velocity_field(source, medium, calc, obs_grid_v, 'dim');
@@ -288,8 +342,13 @@ fprintf('DIM velocity memory: start %s, end %s, delta %s\n', fmt_mem(mem0), fmt_
 % Compute ultrasonic pressure field (DIM ONLY, same z_use)
 %% ============================================================
 fprintf('\n==================== DIM PRESSURE (SPIRAL SOURCE) ====================\n');
-fprintf('pressure obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
-    numel(x_obs_p), numel(y_obs_p), dx_obs_p, r_boundary_p);
+if use_custom_obs_range
+    fprintf('pressure obs grid: Nx=%d, Ny=%d, dx=%.4g m, x=[%.4g, %.4g] m, y=[%.4g, %.4g] m\n', ...
+        numel(x_obs_p), numel(y_obs_p), dx_obs_p, x_obs_p(1), x_obs_p(end), y_obs_p(1), y_obs_p(end));
+else
+    fprintf('pressure obs grid: Nx=%d, Ny=%d, dx=%.4g m, half-width=%.4g m\n', ...
+        numel(x_obs_p), numel(y_obs_p), dx_obs_p, r_boundary_p);
+end
 
 memP0 = get_mem_mb(); tP0 = tic;
 resP = calc_ultrasound_field(source, medium, calc, obs_grid_p, 'dim');
@@ -638,6 +697,13 @@ if do_plane_dirvec
     qscale_dir  = 0.42;     % arrow length
     head_dir    = 0.95;     % arrow head size
     linew_dir   = 0.9;      % arrow line width
+
+    % ---------------- user params ----------------
+    phi_t_dir   = 0;        % instantaneous phase
+    qstep_dir   = 3;        % 抽稀一点：1最密，2/3更容易看方向，也更省fig
+    qscale_dir  = 1.15;     % 箭头整体放大（原来0.42太短）
+    head_dir    = 1.45;     % 箭头头部更大
+    linew_dir   = 1.1;     % 箭头线更粗
 
     use_mask_r  = false;    % circular crop if needed
     mask_r_coef = 0.95;
@@ -1436,6 +1502,52 @@ fprintf(fid, 'l=%d;\n', extra.l);
 fprintf(fid, 'r_boundary_coef=%.15g;\n', extra.r_boundary_coef);
 fprintf(fid, 'r_small_k=%d;  %% r_small = r_small_k * dxy\n', extra.r_small_k);
 fprintf(fid, 'r_large_k=%d;  %% r_large = r_large_k * dxy\n', extra.r_large_k);
+
+if isfield(extra,'use_custom_obs_range') && ~isempty(extra.use_custom_obs_range)
+    fprintf(fid, 'use_custom_obs_range=%s;\n', local_bool_str(extra.use_custom_obs_range));
+end
+if isfield(extra,'z_use') && ~isempty(extra.z_use)
+    fprintf(fid, 'z_use=%.15g;\n', extra.z_use);
+end
+
+if isfield(extra,'xlim_v') && numel(extra.xlim_v)==2
+    fprintf(fid, 'xlim_v=[%.15g, %.15g];\n', extra.xlim_v(1), extra.xlim_v(2));
+end
+if isfield(extra,'ylim_v') && numel(extra.ylim_v)==2
+    fprintf(fid, 'ylim_v=[%.15g, %.15g];\n', extra.ylim_v(1), extra.ylim_v(2));
+end
+if isfield(extra,'xlim_p') && numel(extra.xlim_p)==2
+    fprintf(fid, 'xlim_p=[%.15g, %.15g];\n', extra.xlim_p(1), extra.xlim_p(2));
+end
+if isfield(extra,'ylim_p') && numel(extra.ylim_p)==2
+    fprintf(fid, 'ylim_p=[%.15g, %.15g];\n', extra.ylim_p(1), extra.ylim_p(2));
+end
+
+if isfield(extra,'dx_obs_v') && ~isempty(extra.dx_obs_v)
+    fprintf(fid, 'dx_obs_v=%.15g;\n', extra.dx_obs_v);
+end
+if isfield(extra,'dy_obs_v') && ~isempty(extra.dy_obs_v)
+    fprintf(fid, 'dy_obs_v=%.15g;\n', extra.dy_obs_v);
+end
+if isfield(extra,'dx_obs_p') && ~isempty(extra.dx_obs_p)
+    fprintf(fid, 'dx_obs_p=%.15g;\n', extra.dx_obs_p);
+end
+if isfield(extra,'dy_obs_p') && ~isempty(extra.dy_obs_p)
+    fprintf(fid, 'dy_obs_p=%.15g;\n', extra.dy_obs_p);
+end
+
+if isfield(extra,'Nx_v') && ~isempty(extra.Nx_v)
+    fprintf(fid, 'Nx_v=%d;\n', extra.Nx_v);
+end
+if isfield(extra,'Ny_v') && ~isempty(extra.Ny_v)
+    fprintf(fid, 'Ny_v=%d;\n', extra.Ny_v);
+end
+if isfield(extra,'Nx_p') && ~isempty(extra.Nx_p)
+    fprintf(fid, 'Nx_p=%d;\n', extra.Nx_p);
+end
+if isfield(extra,'Ny_p') && ~isempty(extra.Ny_p)
+    fprintf(fid, 'Ny_p=%d;\n', extra.Ny_p);
+end
 
 fprintf(fid, '\n%% copt (for finding q)\n');
 fprintf(fid, 'max_candidates=%d;\n', copt.max_candidates);

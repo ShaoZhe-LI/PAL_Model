@@ -383,13 +383,16 @@ if do_fig5_like
         p1 = p0;
     end
 
-    C1 = local_make_circle(p1, r_small, 70);
+    C1_num = 36;
+    C2_num = 45;
+
+    C1 = local_make_circle(p1, r_small, C1_num);
     if ~isempty(picked) && size(picked,1) >= 2
         pc = mean(picked(:,1:2), 1);
         rr = max(vecnorm(picked(:,1:2) - pc, 2, 2)) + r_small;
-        C2 = local_make_circle(pc, max(rr, r_large), 90);
+        C2 = local_make_circle(pc, max(rr, r_large), C2_num);
     else
-        C2 = local_make_circle(p1, r_large, 90);
+        C2 = local_make_circle(p1, r_large, C2_num);
     end
 
     is_meshgrid = ...
@@ -418,7 +421,7 @@ if do_fig5_like
     col_pos = [0 0.45 1.00];
     col_neg = [1.00 0.35 0.35];
 
-    qscale3 = 0.25;
+    qscale3 = 0.36;
     z0 = z0mm;
 
     figure('Color','w','Position',[120 120 1200 560], ...
