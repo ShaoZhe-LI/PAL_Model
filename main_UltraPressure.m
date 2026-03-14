@@ -30,7 +30,7 @@ source.profile = 'Vortex-m'; % 'Uniform' | 'Focus' | 'Vortex-m' | 'Poly' | 'Cust
 source.a = 0.1;
 source.v0 = 0.172;
 source.v_ratio = 1;
-source.m = 10;
+source.m = 3;
 source.F = 0.2;
 % source.poly_n = 0;
 

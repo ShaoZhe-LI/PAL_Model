@@ -108,8 +108,8 @@ qk_vec = 1:10;
 use_custom_obs_range = true;   % true: 用自定义范围; false: 保持原来的对称 r_boundary 范围
 
 % ---- custom ranges (unit: m) ----
-xlim_v_custom = [-3.0e-3,  5.0e-3];
-ylim_v_custom = [-6.0e-3,  3.0e-3];
+xlim_v_custom = [-2.7e-3,  4.9e-3];
+ylim_v_custom = [-5.1e-3,  2.4e-3];
 
 xlim_p_custom = [-2.6e-3, 11.8e-3];
 ylim_p_custom = [-9.0e-3,  5.1e-3];
