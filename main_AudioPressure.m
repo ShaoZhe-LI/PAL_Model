@@ -14,9 +14,13 @@
 %   2) DIM audio is only evaluated on one line z = z_goal
 %   3) King audio uses analytic Green-function spectrum
 %   4) FHT and m_FHT are treated as identical, so only m_FHT is used here
-%% ============================================================
+%   5) Timing is printed immediately after each part is computed
+%   6) Parallel pool is created once at the beginning and reused later
 clear; clc; close all;
 
+
+
+%% ============================================================
 global SAVE_PNG SAVE_DIR
 SAVE_PNG = false;
 SAVE_DIR = '';
@@ -49,14 +53,14 @@ if ~isfield(source,'m2'), source.m2 = source.m; end
 calc = struct();
 
 % --- FHT / King ---
-calc.fht.N_FHT      = 32768;
+calc.fht.N_FHT      = 32768 / 2;
 calc.fht.rho_max    = 0.8;
 calc.fht.Nh_scale   = 1.2;
 calc.fht.NH_scale   = 4;
 calc.fht.Nh_v_scale = 1.1;
 calc.fht.zu_max     = 1.0;   % ultrasound z-range
-calc.fht.za_max     = 1.0;   % audio z-range
-% optional external delta, if your make_source_velocity supports it:
+calc.fht.za_max     = 1.2;   % audio z-range
+% optional external delta:
 % calc.fht.delta    = medium.c0 / source.f1 / 2;
 
 % --- DIM source discretization ---
@@ -66,7 +70,7 @@ calc.dim.dis_coe            = 16;
 calc.dim.margin             = 1;
 calc.dim.src_discretization = 'polar';
 calc.dim.use_parallel       = true;
-calc.dim.num_workers        = 4;
+calc.dim.num_workers        = 8;
 
 % --- King analytic spectrum stability ---
 calc.king.gspec_method       = 'analytic';
@@ -91,7 +95,28 @@ fig.phase_amp_ratio    = 1e-3;
 calc.audio.enable           = true;
 calc.audio.z_goal           = z_goal;
 calc.audio.Nphi_dim         = 181;      % azimuth samples for DIM triple integral
-calc.audio.use_parallel_dim = false;    % optional parfor over obs points
+calc.audio.use_parallel_dim = calc.dim.use_parallel;
+
+%% -------------------- parallel pool setup --------------------
+if calc.dim.use_parallel || calc.audio.use_parallel_dim
+    p = gcp('nocreate');
+    if isempty(p)
+        parpool('local', calc.dim.num_workers);
+    elseif p.NumWorkers ~= calc.dim.num_workers
+        delete(p);
+        parpool('local', calc.dim.num_workers);
+    end
+
+    p = gcp('nocreate');
+    fprintf('Parallel pool active: %d workers\n', p.NumWorkers);
+else
+    p = gcp('nocreate');
+    if ~isempty(p)
+        fprintf('Parallel pool exists but parallel flags are off: %d workers\n', p.NumWorkers);
+    else
+        fprintf('Parallel disabled. No pool opened.\n');
+    end
+end
 
 %% ============================================================
 % PREPARE FHT GRID FIRST
@@ -150,6 +175,12 @@ NKing = numel(rhoK) * numel(zK);
 tKing_per_point = tKing / NKing;
 tKing_per_z     = tKing / numel(zK);
 
+fprintf('King ultrasound total time       : %.6f s\n', tKing);
+fprintf('King ultrasound grid points      : %d\n', NKing);
+fprintf('King ultrasound avg time / point : %.6e s/point\n', tKing_per_point);
+fprintf('King ultrasound avg time / point : %.6f ms/point\n', tKing_per_point * 1e3);
+fprintf('King ultrasound avg time / z     : %.6f s/slice\n', tKing_per_z);
+
 %% ============================================================
 % DIM: ultrasound f1/f2
 %% ============================================================
@@ -172,6 +203,12 @@ tDIM = toc;
 
 tDIM_per_point = tDIM / N_dim_obs;
 tDIM_per_z     = tDIM / Nz_dim;
+
+fprintf('DIM ultrasound total time        : %.6f s\n', tDIM);
+fprintf('DIM ultrasound grid points       : %d\n', N_dim_obs);
+fprintf('DIM ultrasound avg time / point  : %.6e s/point\n', tDIM_per_point);
+fprintf('DIM ultrasound avg time / point  : %.6f ms/point\n', tDIM_per_point * 1e3);
+fprintf('DIM ultrasound avg time / z      : %.6f s/slice\n', tDIM_per_z);
 
 if strcmpi(calc.dim.method,'rayleigh')
     pD1_rz = squeeze(resD.dim.p_f1(1,:,:));   % Nx x Nz
@@ -316,13 +353,41 @@ if calc.audio.enable
         rhoK, zK, pK1_rz, pK2_rz, source, medium, calc);
     tAudioK = toc;
 
+    N_audio_king = numel(paK_W_rz);
+    tAudioK_per_point = tAudioK / N_audio_king;
+
+    fprintf('Audio King pa_W total time       : %.6f s\n', tAudioK);
+    fprintf('Audio King audio points          : %d\n', N_audio_king);
+    fprintf('Audio King avg time / point      : %.6e s/point\n', tAudioK_per_point);
+    fprintf('Audio King avg time / point      : %.6f ms/point\n', tAudioK_per_point * 1e3);
+    fprintf('Audio King avg time / z          : %.6f s/slice\n', tAudioK / numel(zAK));
+
     % --------------------------------------------------------
     % DIM audio pa_W only on z = z_goal line by triple integral
     % --------------------------------------------------------
+    if calc.audio.use_parallel_dim
+        p = gcp('nocreate');
+        if isempty(p)
+            fprintf('Audio DIM parallel requested, but no pool is active.\n');
+        else
+            fprintf('Audio DIM using parallel pool with %d workers.\n', p.NumWorkers);
+        end
+    else
+        fprintf('Audio DIM running in serial mode.\n');
+    end
+
     tic;
     [paD_W_line, qD_rz] = local_audio_dim_paW_line_triple( ...
         rhoD, zD, pD1_rz, pD2_rz, source, medium, calc.audio);
     tAudioD = toc;
+
+    N_audio_dim = numel(paD_W_line);
+    tAudioD_per_point = tAudioD / N_audio_dim;
+
+    fprintf('Audio DIM line total time        : %.6f s\n', tAudioD);
+    fprintf('Audio DIM audio points           : %d\n', N_audio_dim);
+    fprintf('Audio DIM avg time / point       : %.6e s/point\n', tAudioD_per_point);
+    fprintf('Audio DIM avg time / point       : %.6f ms/point\n', tAudioD_per_point * 1e3);
 
     % King line for comparison, interpolated to DIM rho points
     [~, izAK] = min(abs(zAK - calc.audio.z_goal));
@@ -379,44 +444,14 @@ if calc.audio.enable
     title(sprintf('Audio phase at z = %.6f m', calc.audio.z_goal));
     legend('King pa_W','DIM triple-integral','Location','best');
     xlim([0 max(rhoD)]);
-
-    % audio time stats
-    N_audio_king = numel(paK_W_rz);
-    N_audio_dim  = numel(paD_W_line);
-
-    tAudioK_per_point = tAudioK / N_audio_king;
-    tAudioD_per_point = tAudioD / N_audio_dim;
-
-    fprintf('Audio King pa_W total time       : %.6f s\n', tAudioK);
-    fprintf('Audio King audio points          : %d\n', N_audio_king);
-    fprintf('Audio King avg time / point      : %.6e s/point\n', tAudioK_per_point);
-    fprintf('Audio King avg time / point      : %.6f ms/point\n', tAudioK_per_point * 1e3);
-
-    fprintf('Audio DIM line total time        : %.6f s\n', tAudioD);
-    fprintf('Audio DIM audio points           : %d\n', N_audio_dim);
-    fprintf('Audio DIM avg time / point       : %.6e s/point\n', tAudioD_per_point);
-    fprintf('Audio DIM avg time / point       : %.6f ms/point\n', tAudioD_per_point * 1e3);
 end
 
 %% ============================================================
-% Timing summary
+% End info
 %% ============================================================
 fprintf('\nDone.\n');
 fprintf('King z-view = %.6f m\n', z_view_K);
 fprintf('DIM  z-view = %.6f m\n', z_view_D);
-
-fprintf('\n==== Ultrasound timing summary ====\n');
-fprintf('King total time            : %.6f s\n', tKing);
-fprintf('King grid points           : %d\n', NKing);
-fprintf('King average time / point  : %.6e s/point\n', tKing_per_point);
-fprintf('King average time / point  : %.6f ms/point\n', tKing_per_point * 1e3);
-fprintf('King average time / z-slice: %.6f s/slice\n', tKing_per_z);
-
-fprintf('DIM total time             : %.6f s\n', tDIM);
-fprintf('DIM observation points     : %d\n', N_dim_obs);
-fprintf('DIM average time / point   : %.6e s/point\n', tDIM_per_point);
-fprintf('DIM average time / point   : %.6f ms/point\n', tDIM_per_point * 1e3);
-fprintf('DIM average time / z-slice : %.6f s/slice\n', tDIM_per_z);
 
 %% ============================================================
 % Local functions
@@ -504,7 +539,7 @@ Pa   = Q .* G;
 par0 = (ifft(Pa.')).';
 par  = par0(:, N_conv - Nza + 1 : N_conv);
 
-phia_W  = -m_FHT(par, N_FHT, Nza, NH, Nh, a_solve, x0, x1, k0, ma) * delta * 1j / 2;
+phia_W   = -m_FHT(par, N_FHT, Nza, NH, Nh, a_solve, x0, x1, k0, ma) * delta * 1j / 2;
 pa_W_full = 1j * rho0 * wa * phia_W;
 
 % crop to rho <= rho_max
