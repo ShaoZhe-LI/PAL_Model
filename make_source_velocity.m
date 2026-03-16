@@ -359,9 +359,15 @@ fht.rho_max   = cf.rho_max;
 fht.zu_max    = cf.zu_max;
 fht.za_max    = cf.za_max;
 
-% delta = lambda_a / 8 (audio wavelength)
+% delta: priority = external calc.fht.delta > default lambda_a/8
 lambda_a = medium.c0 / source.fa;
-fht.delta = lambda_a / 8;
+if isfield(cf,'delta') && ~isempty(cf.delta)
+    fht.delta = cf.delta;
+    fht.delta_source = 'external calc.fht.delta';
+else
+    fht.delta = lambda_a / 8;
+    fht.delta_source = 'default lambda_a/8';
+end
 
 % Truncation lengths:
 %   Nh by rho_max; NH by ultrasonic reference f2 (w2/c0)
@@ -647,6 +653,8 @@ meta.fht_grid_based_on   = 'f2';           % FHT sampling/truncation uses f2
 meta.delta_based_on      = 'fa/8';         % z-step based on audio wavelength
 meta.dim_discretize_freq = dim.use_freq;   % which freq controls DIM dx,dy
 meta.use_absorp = medium.use_absorp;       % whether absorption is used
+meta.fht_delta        = fht.delta;
+meta.fht_delta_source = fht.delta_source;
 
 % ---- method separation (important) ----
 meta.method_separation = struct( ...
