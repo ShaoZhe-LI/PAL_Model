@@ -60,6 +60,11 @@ function [source, fht, dim] = make_source_velocity(source, medium, calc)
 %       .zu_max      : max z for ultrasonic (m) (default 15)
 %       .za_max      : max z for audio (m) (default 4)
 %       .solve_handle: function handle to solve_kappa0 (default @solve_kappa0)
+%       .z_sampling  : 'uniform' | 'log' (default 'uniform')
+%       .Nz_ultra    : total number of z_ultra points when using 'log'
+%                      default = numel(0:delta:zu_max)
+%       .z_log_min   : minimum positive z used in log sampling
+%                      default = delta
 %
 %       delta rule:
 %       - ultrasonic field delta is set by audio wavelength: delta = (c0/fa)/8
@@ -342,7 +347,7 @@ cf = calc.fht;
 if ~isfield(cf,'N_FHT')      || isempty(cf.N_FHT);      cf.N_FHT = 32768; end
 if ~isfield(cf,'rho_max')    || isempty(cf.rho_max);    cf.rho_max = 2; end
 if ~isfield(cf,'Nh_scale')   || isempty(cf.Nh_scale);   cf.Nh_scale = 1.2; end
-if ~isfield(cf,'NH_scale')   || isempty(cf.NH_scale);   cf.NH_scale = 4; end
+if ~isfield(cf,'NH_scale')   || isempty(cf.NH_scale);   cf.NH_scale = 1.2; end
 if ~isfield(cf,'Nh_v_scale') || isempty(cf.Nh_v_scale); cf.Nh_v_scale = cf.Nh_scale; end
 if ~isfield(cf,'zu_max')     || isempty(cf.zu_max);     cf.zu_max = 15; end
 if ~isfield(cf,'za_max')     || isempty(cf.za_max);     cf.za_max = 4; end
@@ -360,13 +365,13 @@ fht.zu_max    = cf.zu_max;
 fht.za_max    = cf.za_max;
 
 % delta: priority = external calc.fht.delta > default lambda_a/8
-lambda_a = medium.c0 / source.fa;
+lambda_2 = medium.c0 / source.f2;
 if isfield(cf,'delta') && ~isempty(cf.delta)
     fht.delta = cf.delta;
     fht.delta_source = 'external calc.fht.delta';
 else
-    fht.delta = lambda_a / 8;
-    fht.delta_source = 'default lambda_a/8';
+    fht.delta = lambda_2 / 4;
+    fht.delta_source = 'default lambda_2/4';
 end
 
 % Truncation lengths:
@@ -390,8 +395,54 @@ fht.NH_v = fht.NH;  % keep same k_rho truncation as field (based on f2)
 fht.xh_v = (fht.x1 * fht.Nh_v).';
 fht.xH_v = (fht.x1 * fht.NH_v).';
 
-% z grids
-fht.z_ultra = 0:fht.delta:fht.zu_max;
+% -------------------- z sampling mode --------------------
+if ~isfield(cf,'z_sampling') || isempty(cf.z_sampling)
+    cf.z_sampling = 'uniform';   % 'uniform' | 'log'
+end
+fht.z_sampling = lower(strtrim(char(cf.z_sampling)));
+
+if ~isfield(cf,'Nz_ultra') || isempty(cf.Nz_ultra)
+    % default total point count consistent with old uniform grid
+    cf.Nz_ultra = numel(0:fht.delta:fht.zu_max);
+end
+fht.Nz_ultra_target = cf.Nz_ultra;
+
+if ~isfield(cf,'z_log_min') || isempty(cf.z_log_min)
+    cf.z_log_min = fht.delta;   % default positive start for log grid
+end
+fht.z_log_min = cf.z_log_min;
+
+switch fht.z_sampling
+    case 'uniform'
+        % keep exactly the old behavior
+        fht.z_ultra = 0:fht.delta:fht.zu_max;
+
+    case 'log'
+        if fht.zu_max <= 0
+            error('make_source_velocity:BadZuMax', ...
+                'For log z sampling, calc.fht.zu_max must be > 0.');
+        end
+
+        if fht.Nz_ultra_target < 2
+            error('make_source_velocity:BadNzUltra', ...
+                'For log z sampling, calc.fht.Nz_ultra must be >= 2.');
+        end
+
+        zmin = max(fht.z_log_min, eps);
+        if zmin >= fht.zu_max
+            error('make_source_velocity:BadZLogMin', ...
+                'calc.fht.z_log_min must be smaller than calc.fht.zu_max.');
+        end
+
+        zpos = logspace(log10(zmin), log10(fht.zu_max), fht.Nz_ultra_target - 1);
+        fht.z_ultra = unique([0, zpos]);
+
+    otherwise
+        error('make_source_velocity:BadZSampling', ...
+            'calc.fht.z_sampling must be ''uniform'' or ''log''.');
+end
+
+% audio z grid remains unchanged
 fht.z_audio = 0:fht.delta:fht.za_max;
 
 fht.Nz_ultra = numel(fht.z_ultra);

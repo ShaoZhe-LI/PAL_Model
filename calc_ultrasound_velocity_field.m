@@ -18,6 +18,10 @@ function result = calc_ultrasound_velocity_field(source, medium, calc, grid, met
 % OUTPUT
 %   result.king : axisymmetric velocity on (rho,z)
 %   result.dim  : Cartesian + cylindrical components on (x,y,z)
+%
+% KING/FHT GREEN-SPECTRUM OPTIONS
+%   calc.king.gspec_method = 'analytic'  : use analytic spectrum
+%   calc.king.gspec_method = 'transform' : use 0th-order FHT of Green func
 % =========================================================================
 
 if nargin < 5 || isempty(method), method = 'king'; end
@@ -42,7 +46,7 @@ if ~isfield(calc.king,'kz_min') || isempty(calc.king.kz_min)
     calc.king.kz_min = 1e-12;
 end
 if ~isfield(calc.king,'gspec_method') || isempty(calc.king.gspec_method)
-    calc.king.gspec_method = 'analytic';
+    calc.king.gspec_method = 'transform';
 end
 king_gspec_method = lower(strtrim(string(calc.king.gspec_method)));
 
@@ -98,25 +102,67 @@ if do_king
     Vs2 = Vs2(:);
 
     Zabs = abs(z);
-    sgnZ = sign(z); sgnZ(sgnZ==0) = 1;
+    tol_z0 = 1e-15;
+    sgnZ = sign(z);
+    sgnZ(abs(z) < tol_z0) = 0;
 
     KZ1 = local_kz_branch(source.k1, kr, Nz);
     KZ2 = local_kz_branch(source.k2, kr, Nz);
 
-    KZ1s = local_kz_floor(KZ1, calc.king.kz_min);
-    KZ2s = local_kz_floor(KZ2, calc.king.kz_min);
+    zrow = reshape(Zabs, 1, []);
 
-    E1 = exp(1j * KZ1 .* (ones(Nkr,1)*Zabs));
-    E2 = exp(1j * KZ2 .* (ones(Nkr,1)*Zabs));
+    switch king_gspec_method
+        case "analytic"
+            G1 = local_green_spec_analytic(source.k1, kr, zrow, ...
+                calc.king.eps_phase, calc.king.kz_min);
+            G2 = local_green_spec_analytic(source.k2, kr, zrow, ...
+                calc.king.eps_phase, calc.king.kz_min);
 
-    Scom1 = (Vs1 * ones(1,Nz)) .* E1 ./ KZ1s;
-    Scom2 = (Vs2 * ones(1,Nz)) .* E2 ./ KZ2s;
+        case "transform"
+            G1 = complex(zeros(Nkr, Nz));
+            G2 = complex(zeros(Nkr, Nz));
 
-    Sz1   = (Vs1 * ones(1,Nz)) .* E1;
-    Sz2   = (Vs2 * ones(1,Nz)) .* E2;
+            for iz = 1:Nz
+                z0 = Zabs(iz);
 
-    Sr1   = Scom1 .* (kr * ones(1,Nz));
-    Sr2   = Scom2 .* (kr * ones(1,Nz));
+                r = hypot(rho, z0);
+                r(r < 1e-9) = 1e-9;
+
+                g1 = exp(1j * source.k1 .* r) ./ (4*pi*r);
+                g2 = exp(1j * source.k2 .* r) ./ (4*pi*r);
+
+                G1(:,iz) = m_FHT(g1, fht.N_FHT, 1, fht.Nh, fht.NH, ...
+                    fht.a_solve, fht.x0, fht.x1, fht.k0, 0);
+
+                G2(:,iz) = m_FHT(g2, fht.N_FHT, 1, fht.Nh, fht.NH, ...
+                    fht.a_solve, fht.x0, fht.x1, fht.k0, 0);
+            end
+
+        otherwise
+            error('calc_ultrasound_velocity_field:BadKingGspecMethod', ...
+                'calc.king.gspec_method must be ''analytic'' or ''transform''.');
+    end
+
+    % exp(i*kz*z)/kz = -4*pi*i * G
+    Hcom1 = -4*pi*1i * G1;
+    Hcom2 = -4*pi*1i * G2;
+
+    % exp(i*kz*z)
+    Hz1 = KZ1 .* Hcom1;
+    Hz2 = KZ2 .* Hcom2;
+
+    % kr * exp(i*kz*z)/kz
+    Hr1 = (kr * ones(1,Nz)) .* Hcom1;
+    Hr2 = (kr * ones(1,Nz)) .* Hcom2;
+
+    Scom1 = (Vs1 * ones(1,Nz)) .* Hcom1;
+    Scom2 = (Vs2 * ones(1,Nz)) .* Hcom2;
+
+    Sz1   = (Vs1 * ones(1,Nz)) .* Hz1;
+    Sz2   = (Vs2 * ones(1,Nz)) .* Hz2;
+
+    Sr1   = (Vs1 * ones(1,Nz)) .* Hr1;
+    Sr2   = (Vs2 * ones(1,Nz)) .* Hr2;
 
     Vz1 = m_FHT(Sz1, fht.N_FHT, Nz, fht.NH, fht.Nh, ...
         fht.a_solve, fht.x0, fht.x1, fht.k0, m);
@@ -136,7 +182,12 @@ if do_king
         Vphi2 = complex(zeros(Nrho, Nz));
     else
         rho_safe = rho;
-        rho_safe(rho_safe==0) = min(rho_safe(rho_safe>0)) * 1e-6 + 1e-12;
+        pos = rho_safe(rho_safe>0);
+        if isempty(pos)
+            rho_safe(:) = 1e-12;
+        else
+            rho_safe(rho_safe==0) = min(pos) * 1e-6 + 1e-12;
+        end
         Vphi1 = (m ./ rho_safe) * ones(1,Nz) .* Vphi_core1;
         Vphi2 = (m ./ rho_safe) * ones(1,Nz) .* Vphi_core2;
     end
@@ -171,6 +222,11 @@ if do_king
 
     result.king.f1 = source.f1;
     result.king.f2 = source.f2;
+
+    result.king.G1 = G1;
+    result.king.G2 = G2;
+    result.king.Vs1 = Vs1;
+    result.king.Vs2 = Vs2;
 end
 
 % =========================================================================
@@ -373,11 +429,32 @@ kz(idx) = -kz(idx);
 KZ = kz * ones(1, Nz);
 end
 
-function KZs = local_kz_floor(KZ, kz_min)
+function G = local_green_spec_analytic(k, kr_col, z_row, eps_phase, kz_min)
+kz = sqrt(k.^2 - kr_col.^2);
+idx = imag(kz) < 0;
+kz(idx) = -kz(idx);
+
+Nr = numel(kz);
+Nz = numel(z_row);
+
+KZ = kz * ones(1, Nz);
+Z  = ones(Nr,1) * reshape(z_row, 1, []);
+
 KZs = KZ;
-mask = abs(KZs) < kz_min;
+mask_kz0 = abs(KZs) < kz_min;
+if any(mask_kz0(:))
+    KZs(mask_kz0) = kz_min .* exp(1j * angle(KZs(mask_kz0)));
+end
+
+G = (1j/(4*pi)) * exp(1j * KZ .* Z) ./ KZs;
+
+phase = abs(KZ .* Z);
+rel_im = abs(imag(KZ)) ./ max(abs(KZ), kz_min);
+
+mask = (phase < eps_phase) & (rel_im < 1e-6);
 if any(mask(:))
-    KZs(mask) = kz_min .* exp(1j * angle(KZs(mask)));
+    Gt = (1./KZs) + 1j*Z - (KZs .* (Z.^2))/2;
+    G(mask) = (1j/(4*pi)) * Gt(mask);
 end
 end
 

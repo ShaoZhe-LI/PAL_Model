@@ -17,11 +17,18 @@ function result = calc_ultrasound_field(source, medium, calc, grid, method)
 %
 % INPUT
 %   source, medium, calc : passed to make_source_velocity()
-%   grid   : optional
-%   method : 'king' | 'dim' | 'both'   (default 'both')
+%   grid : optional
+%   method : 'king' | 'dim' | 'both' (default 'both')
 %
 % OUTPUT
 %   result.king.* and/or result.dim.*
+%
+% NOTE ON DIM-RAYLEIGH NEAR-FIELD REGULARIZATION
+%   To improve robustness when z is very small, the Rayleigh point-kernel
+%   1/R is regularized by an equivalent panel radius:
+%       R_reg = sqrt(R^2 + a_eq^2),   a_eq = sqrt(dA/pi)
+%   This mainly affects the very near source plane and leaves far-field
+%   behavior almost unchanged.
 % =========================================================================
 
 if nargin < 5 || isempty(method)
@@ -44,7 +51,7 @@ dim_method = lower(strtrim(string(calc.dim.method)));
 
 if ~isfield(calc,'king') || isempty(calc.king); calc.king = struct(); end
 if ~isfield(calc.king,'gspec_method') || isempty(calc.king.gspec_method)
-    calc.king.gspec_method = 'analytic';
+    calc.king.gspec_method = 'transform';
 end
 king_gspec_method = lower(strtrim(string(calc.king.gspec_method)));
 
@@ -92,6 +99,20 @@ if ~isfield(calc.dim,'num_workers') || isempty(calc.dim.num_workers)
     calc.dim.num_workers = 4;
 end
 
+% ===== 新增：DIM-Rayleigh 近源正则化默认参数 =====
+if ~isfield(calc.dim,'nearfield_regularization') || isempty(calc.dim.nearfield_regularization)
+    calc.dim.nearfield_regularization = struct();
+end
+if ~isfield(calc.dim.nearfield_regularization,'enable') || isempty(calc.dim.nearfield_regularization.enable)
+    calc.dim.nearfield_regularization.enable = true;
+end
+if ~isfield(calc.dim.nearfield_regularization,'mode') || isempty(calc.dim.nearfield_regularization.mode)
+    calc.dim.nearfield_regularization.mode = 'panel_radius'; % only supported mode now
+end
+if ~isfield(calc.dim.nearfield_regularization,'min_radius_factor') || isempty(calc.dim.nearfield_regularization.min_radius_factor)
+    calc.dim.nearfield_regularization.min_radius_factor = 0.5;
+end
+
 if ~isfield(calc,'asm') || isempty(calc.asm); calc.asm = struct(); end
 if ~isfield(calc.asm,'pad_factor') || isempty(calc.asm.pad_factor)
     calc.asm.pad_factor = 8;
@@ -132,7 +153,7 @@ if do_king
 
             for iz = 1:Nz
                 z0 = z_k(iz);
-                r  = hypot(rho_k, z0);
+                r = hypot(rho_k, z0);
                 r(r < 1e-9) = 1e-9;
 
                 g1 = exp(1j * source.k1 .* r) ./ (4*pi*r);
@@ -168,8 +189,8 @@ if do_king
         kr_c = kr(:);
         zrow = reshape(z_k, 1, []);
 
-        k1r = real(source.k1);  a1 = abs(imag(source.k1));
-        k2r = real(source.k2);  a2 = abs(imag(source.k2));
+        k1r = real(source.k1); a1 = abs(imag(source.k1));
+        k2r = real(source.k2); a2 = abs(imag(source.k2));
 
         dk1 = max(calc.king.band_refine.delta_k_factor * a1, 1e-12);
         dk2 = max(calc.king.band_refine.delta_k_factor * a2, 1e-12);
@@ -223,7 +244,7 @@ if do_king
 
                 for iz = 1:Nz
                     z0 = z_k(iz);
-                    r  = hypot(rho_k_f, z0);
+                    r = hypot(rho_k_f, z0);
                     r(r < 1e-9) = 1e-9;
 
                     g1 = exp(1j * source.k1 .* r) ./ (4*pi*r);
@@ -267,18 +288,18 @@ if do_king
     p2 = 1j * source.medium.rho0 * source.medium.c0 * real(source.k2) .* phi2;
 
     result.king = struct();
-    result.king.method            = "King-FHT";
+    result.king.method = "King-FHT";
     result.king.green_spec_method = king_gspec_method;
-    result.king.eps_phase         = calc.king.eps_phase;
-    result.king.kz_min            = calc.king.kz_min;
-    result.king.rho               = rho_k;
-    result.king.z                 = z_k;
-    result.king.p_f1              = p1;
-    result.king.p_f2              = p2;
-    result.king.f1                = source.f1;
-    result.king.f2                = source.f2;
-    result.king.G1                = G1;
-    result.king.Vs1               = Vs1;
+    result.king.eps_phase = calc.king.eps_phase;
+    result.king.kz_min = calc.king.kz_min;
+    result.king.rho = rho_k;
+    result.king.z = z_k;
+    result.king.p_f1 = p1;
+    result.king.p_f2 = p2;
+    result.king.f1 = source.f1;
+    result.king.f2 = source.f2;
+    result.king.G1 = G1;
+    result.king.Vs1 = Vs1;
 end
 
 % =========================================================================
@@ -328,15 +349,21 @@ if do_dim
             if isscalar(dA_w)
                 q1 = vn1 * dA_w;
                 q2 = vn2 * dA_w;
+                dA_vec = repmat(dA_w, numel(vn1), 1);
             else
                 if numel(dA_w) ~= numel(vn1)
                     error('calc_ultrasound_field:BadDA', 'dA_pts size mismatch with Vn_pts.');
                 end
                 q1 = vn1 .* dA_w;
                 q2 = vn2 .* dA_w;
+                dA_vec = dA_w;
             end
 
             Nsrc = numel(Xs);
+
+            % ===== 新增：每个源点对应的等效面元半径 =====
+            reg = calc.dim.nearfield_regularization;
+            aeq = local_get_equiv_panel_radius(dA_vec, reg.min_radius_factor);
 
             P1 = complex(zeros(Ny, Nx, Nz));
             P2 = complex(zeros(Ny, Nx, Nz));
@@ -389,12 +416,18 @@ if do_dim
                             dYj = yo(id) - Ys(jd).';
                             dZj = z0     - Zs(jd).';
                             Rj  = sqrt(dXj.^2 + dYj.^2 + dZj.^2);
-                            Rj(Rj < 1e-9) = 1e-9;
 
-                            Gj = exp(1j*source.k1.*Rj) ./ (4*pi*Rj);
+                            if reg.enable
+                                Rj_use = local_regularize_distance(Rj, aeq(jd).', reg.mode);
+                            else
+                                Rj_use = Rj;
+                                Rj_use(Rj_use < 1e-9) = 1e-9;
+                            end
+
+                            Gj = exp(1j*source.k1.*Rj_use) ./ (4*pi*Rj_use);
                             phi1 = phi1 + Gj * q1(jd);
 
-                            Gj = exp(1j*source.k2.*Rj) ./ (4*pi*Rj);
+                            Gj = exp(1j*source.k2.*Rj_use) ./ (4*pi*Rj_use);
                             phi2 = phi2 + Gj * q2(jd);
                         end
 
@@ -424,12 +457,18 @@ if do_dim
                             dYj = yo(id) - Ys(jd).';
                             dZj = z0     - Zs(jd).';
                             Rj  = sqrt(dXj.^2 + dYj.^2 + dZj.^2);
-                            Rj(Rj < 1e-9) = 1e-9;
 
-                            Gj = exp(1j*source.k1.*Rj) ./ (4*pi*Rj);
+                            if reg.enable
+                                Rj_use = local_regularize_distance(Rj, aeq(jd).', reg.mode);
+                            else
+                                Rj_use = Rj;
+                                Rj_use(Rj_use < 1e-9) = 1e-9;
+                            end
+
+                            Gj = exp(1j*source.k1.*Rj_use) ./ (4*pi*Rj_use);
                             phi1 = phi1 + Gj * q1(jd);
 
-                            Gj = exp(1j*source.k2.*Rj) ./ (4*pi*Rj);
+                            Gj = exp(1j*source.k2.*Rj_use) ./ (4*pi*Rj_use);
                             phi2 = phi2 + Gj * q2(jd);
                         end
 
@@ -443,18 +482,19 @@ if do_dim
             end
 
             result.dim = struct();
-            result.dim.method         = "DIM-Rayleigh";
-            result.dim.dim_method     = "rayleigh";
-            result.dim.x              = x_obs;
-            result.dim.y              = y_obs;
-            result.dim.z              = z_obs;
-            result.dim.p_f1           = P1;
-            result.dim.p_f2           = P2;
-            result.dim.f1             = source.f1;
-            result.dim.f2             = source.f2;
-            result.dim.block_size     = blk;
+            result.dim.method = "DIM-Rayleigh";
+            result.dim.dim_method = "rayleigh";
+            result.dim.x = x_obs;
+            result.dim.y = y_obs;
+            result.dim.z = z_obs;
+            result.dim.p_f1 = P1;
+            result.dim.p_f2 = P2;
+            result.dim.f1 = source.f1;
+            result.dim.f2 = source.f2;
+            result.dim.block_size = blk;
             result.dim.src_block_size = src_blk;
-            result.dim.use_parallel   = use_par;
+            result.dim.use_parallel = use_par;
+            result.dim.nearfield_regularization = reg;
             if use_par
                 result.dim.num_workers = calc.dim.num_workers;
             end
@@ -512,19 +552,19 @@ if do_dim
             [Xo, Yo] = meshgrid(x_out, y_out);
 
             result.dim = struct();
-            result.dim.method     = "DIM-ASM";
+            result.dim.method = "DIM-ASM";
             result.dim.dim_method = "asm";
-            result.dim.x          = x_out;
-            result.dim.y          = y_out;
-            result.dim.z          = z_obs;
-            result.dim.X          = Xo;
-            result.dim.Y          = Yo;
-            result.dim.p_f1       = P1_full;
-            result.dim.p_f2       = P2_full;
-            result.dim.f1         = source.f1;
-            result.dim.f2         = source.f2;
-            result.dim.dx         = dx;
-            result.dim.dy         = dy;
+            result.dim.x = x_out;
+            result.dim.y = y_out;
+            result.dim.z = z_obs;
+            result.dim.X = Xo;
+            result.dim.Y = Yo;
+            result.dim.p_f1 = P1_full;
+            result.dim.p_f2 = P2_full;
+            result.dim.f1 = source.f1;
+            result.dim.f2 = source.f2;
+            result.dim.dx = dx;
+            result.dim.dy = dy;
             result.dim.pad_factor = pf;
 
         otherwise
@@ -557,7 +597,7 @@ end
 
 G = (1j/(4*pi)) * exp(1j * KZ .* Z) ./ KZs;
 
-phase = abs(KZ .* Z);
+phase  = abs(KZ .* Z);
 rel_im = abs(imag(KZ)) ./ max(abs(KZ), kz_min);
 
 mask = (phase < eps_phase) & (rel_im < 1e-6);
@@ -632,4 +672,30 @@ W(id1) = 1;
 id2 = (d > dk) & (d < dk + tw);
 xi = (d(id2) - dk) / tw;
 W(id2) = 0.5 * (1 + cos(pi * xi));
+end
+
+% ===== 新增 helper 1：等效面元半径 =====
+function aeq = local_get_equiv_panel_radius(dA_vec, min_radius_factor)
+dA_vec = abs(dA_vec(:));
+aeq = sqrt(max(dA_vec, 0) / pi);
+
+% 避免出现极小/零面积导致正则化半径失效
+a_floor = min_radius_factor * sqrt(max(median(dA_vec(dA_vec > 0)), eps) / pi);
+if isempty(a_floor) || ~isfinite(a_floor) || a_floor <= 0
+    a_floor = 1e-12;
+end
+aeq = max(aeq, a_floor);
+end
+
+% ===== 新增 helper 2：近源正则化距离 =====
+function R_use = local_regularize_distance(R, aeq_row, mode)
+switch lower(string(mode))
+    case "panel_radius"
+        R_use = sqrt(R.^2 + aeq_row.^2);
+    otherwise
+        error('calc_ultrasound_field:BadNearfieldRegularizationMode', ...
+            'Unsupported nearfield regularization mode.');
+end
+
+R_use(R_use < 1e-12) = 1e-12;
 end

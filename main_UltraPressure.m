@@ -5,10 +5,10 @@
 % (2) xOy @ z≈1 m (from King/FHT): SPL and phase on (x,y)
 % via planar phase extension: p(x,y)=p(rho)*exp(j*m*phi)
 %
-% UPDATED FOR UNIFIED GRID INTERFACE:
-% - calc_ultrasound_field(..., obs_grid, method)
-% - KING/FHT always uses its own FHT grid
-% - DIM follows obs_grid.dim when obs_grid is provided
+% UPDATED:
+% - add compare_mode = 'radial' / 'axial'
+% - only change DIM observation points and corresponding comparison figures
+% - all other parameters and function calls remain unchanged
 % ============================================================
 
 clear; clc; close all;
@@ -16,6 +16,11 @@ clear; clc; close all;
 %% -------------------- save figures (GLOBAL control) --------------------
 global SAVE_PNG SAVE_DIR
 SAVE_PNG = false;   % <<< 全局开关：true 保存；false 不保存
+
+%% -------------------- comparison mode --------------------
+% 'radial' : compare radial profile at z = z_target
+% 'axial'  : compare axial profile at rho = xh(1)
+compare_mode = 'axial';   % <<< 'radial' or 'axial'
 
 %% -------------------- medium --------------------
 medium.c0 = 343;
@@ -27,27 +32,28 @@ medium.atten_handle = @(f) AbsorpAttenCoef(f);
 
 %% -------------------- source --------------------
 source.profile = 'Vortex-m'; % 'Uniform' | 'Focus' | 'Vortex-m' | 'Poly' | 'Custom'
-source.a = 0.1;
-source.v0 = 0.172;
+source.a = 0.05;
+source.v0 = 0.108;
 source.v_ratio = 1;
-source.m = 3;
+source.m = 0;
 source.F = 0.2;
 % source.poly_n = 0;
 
-source.f1 = 42e3;
-source.fa = 2e3;
+source.f1 = 40e3;
+source.fa = 0.5e3;
 
 %% -------------------- calc parameters --------------------
 calc = struct();
 
 % --- FHT / King ---
-calc.fht.N_FHT = 32768 * 1;
-calc.fht.rho_max = 1.2;
+calc.fht.N_FHT = 16384 * 1;
+calc.fht.rho_max = 0.5;
 calc.fht.Nh_scale = 1.2;
 calc.fht.NH_scale = 4;
 calc.fht.Nh_v_scale = 1.1;
-calc.fht.zu_max = 1.1;
-calc.fht.za_max = 1;
+calc.fht.zu_max = 1.5;
+calc.fht.za_max = 0.5;
+calc.fht.delta = medium.c0 / source.f1 / 0.5;
 
 % --- DIM source discretization ---
 calc.dim.use_freq = 'f2';
@@ -56,13 +62,13 @@ calc.dim.margin = 1;
 calc.dim.src_discretization = 'polar';   % 'cart' (default) | 'polar'
 
 % --- King analytic spectrum stability ---
-calc.king.gspec_method = 'analytic'; % 'analytic' or 'transform'，优选前者
+calc.king.gspec_method = 'transform'; % 'analytic' or 'transform'，优选后者
 calc.king.eps_kzz = 1e-3; % keep your naming
 % map to function-expected fields:
 calc.king.eps_phase = calc.king.eps_kzz;
 calc.king.kz_min = 1e-12;
 
-calc.king.band_refine.enable = true; % 'true' or 'false'
+calc.king.band_refine.enable = false; % 'true' or 'false'
 % 本行决定是否局部加细以改善近轴结果
 % 计算发现，局部加细比等倍率的全局加细更加耗时，且效果不如后者，后续应改善
 % 相应的，局部加细占用内存会少于全局加细
@@ -85,7 +91,7 @@ if SAVE_PNG
         mkdir(SAVE_DIR);
     end
 
-    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig);
+    local_write_runinfo_txt(SAVE_DIR, medium, source, calc, fig, compare_mode);
 else
     SAVE_DIR = '';
 end
@@ -112,19 +118,34 @@ z_use = zK_full(iz);
 
 rho_ds = rho_full(1:ds:end);
 
-% Build observation grid for DIM
+% ---------- build observation grid for DIM ----------
 % NOTE:
-% - variable name kept as obs_grid to avoid conflict with MATLAB grid()
-% - DIM will strictly follow obs_grid.dim because obs_grid is explicitly passed
-obs_grid.dim.x = rho_ds(:).';
-obs_grid.dim.y = 0;
-obs_grid.dim.z = z_use;
-obs_grid.dim.block_size = 200000;   % used by rayleigh only; ignored by asm
+% - radial: x = rho_ds, z = z_use
+% - axial : x = xh(1),   z = zK_full
+switch lower(compare_mode)
+    case 'radial'
+        obs_grid.dim.x = rho_ds(:).';
+        obs_grid.dim.y = 0;
+        obs_grid.dim.z = z_use;
+        obs_grid.dim.block_size = 200000;   % used by rayleigh only; ignored by asm
+
+    case 'axial'
+        rho_ax = rho_full(1);               % xh 第一个值
+        obs_grid.dim.x = rho_ax;
+        obs_grid.dim.y = 0;
+        obs_grid.dim.z = zK_full(:).';      % 全轴向 z
+        obs_grid.dim.block_size = 200000;
+
+    otherwise
+        error('compare_mode must be ''radial'' or ''axial''.');
+end
 
 %% ============================================================
 % SINGLE CALL: method = 'both' (one res stores king+dim)
 %% ============================================================
 fprintf('\n==================== BOTH (King + DIM) ====================\n');
+fprintf('compare_mode = %s\n', compare_mode);
+
 mem0 = get_mem_mb(); t0 = tic;
 
 res = calc_ultrasound_field( ...
@@ -137,30 +158,71 @@ fprintf('Total time (both): %.3f s\n', tAll);
 fprintf('Total memory: start %s, end %s, delta %s\n', fmt_mem(mem0), fmt_mem(mem1), fmt_mem(mem1-mem0));
 
 %% -------------------- extract fields (use f1 here) --------------------
-% King: take same z index (nearest) and downsample to rho_ds
 zK = res.king.z(:);
 rhoK = res.king.rho(:);
 
-[~, izK] = min(abs(zK - z_use));
-pK_full = res.king.p_f1(:, izK);     % Nr x 1
-pK = pK_full(1:ds:end);              % match rho_ds
+switch lower(compare_mode)
+    case 'radial'
+        % ---------- King ----------
+        [~, izK] = min(abs(zK - z_use));
+        pK_full = res.king.p_f1(:, izK);     % Nr x 1
+        pK = pK_full(1:ds:end);              % match rho_ds
 
-% DIM:
-if strcmpi(res.calc.dim.method,'rayleigh')
-    % DIM-Rayleigh output is Ny x Nx x Nz with Ny=1, Nx=numel(rho_ds), Nz=1
-    pD = squeeze(res.dim.p_f1(1,:,1)).';  % Nx x 1
-else
-    % ASM output: p_f1 is Ny x Nx x Nz on native uniform grid
-    xA = res.dim.x(:);
-    yA = res.dim.y(:);
-    zA = res.dim.z(:);
+        % ---------- DIM ----------
+        if strcmpi(res.calc.dim.method,'rayleigh')
+            % DIM-Rayleigh output: Ny x Nx x Nz, here Ny=1, Nz=1
+            pD = squeeze(res.dim.p_f1(1,:,1)).';  % Nx x 1
+        else
+            % ASM output: p_f1 is Ny x Nx x Nz on native uniform grid
+            xA = res.dim.x(:);
+            yA = res.dim.y(:); %#ok<NASGU>
+            zA = res.dim.z(:);
 
-    [~, iy0] = min(abs(yA - 0));
-    [~, iz0] = min(abs(zA - z_use));
+            [~, iy0] = min(abs(res.dim.y(:) - 0));
+            [~, iz0] = min(abs(zA - z_use));
 
-    pA_line = squeeze(res.dim.p_f1(iy0,:,iz0)).'; % numel(xA) x 1
-    % interpolate to rho_ds ONLY in MAIN
-    pD = interp1(xA, pA_line, rho_ds, 'linear', 0);
+            pA_line = squeeze(res.dim.p_f1(iy0,:,iz0)).'; % numel(xA) x 1
+            pD = interp1(xA, pA_line, rho_ds, 'linear', 0);
+        end
+
+        coord_vec   = rho_ds(:);
+        coord_label = '\rho (m)';
+        coord_name  = 'rho';
+        coord_title = sprintf('z = %.2f m', z_use);
+
+    case 'axial'
+        % ---------- King ----------
+        rho_ax = rho_full(1);
+        [~, ixK] = min(abs(rhoK - rho_ax));
+        pK = res.king.p_f1(ixK, :).';        % Nz x 1
+
+        % ---------- DIM ----------
+        if strcmpi(res.calc.dim.method,'rayleigh')
+            % DIM-Rayleigh output: Ny x Nx x Nz, here Ny=1, Nx=1
+            pD = squeeze(res.dim.p_f1(1,1,:));   % Nz x 1
+            pD = pD(:);
+        else
+            xA = res.dim.x(:);
+            yA = res.dim.y(:);
+            zA = res.dim.z(:);
+
+            [~, ix0] = min(abs(xA - rho_ax));
+            [~, iy0] = min(abs(yA - 0));
+
+            pA_line = squeeze(res.dim.p_f1(iy0,ix0,:));   % numel(zA) x 1
+            pA_line = pA_line(:);
+
+            if numel(zA) == numel(zK) && max(abs(zA - zK)) < 1e-12
+                pD = pA_line;
+            else
+                pD = interp1(zA, pA_line, zK, 'linear', 0);
+            end
+        end
+
+        coord_vec   = zK(:);
+        coord_label = 'z (m)';
+        coord_name  = 'z';
+        coord_title = sprintf('\\rho = x_h(1) = %.6g m', rho_ax);
 end
 
 %% -------------------- metrics --------------------
@@ -171,53 +233,58 @@ if fig.unwrap
     phK = unwrap(angle(pK));
     phD = unwrap(angle(pD));
 else
-    phK = (angle(pK));
-    phD = (angle(pD));
+    phK = angle(pK);
+    phD = angle(pD);
 end
 
 eps0 = 1e-12;
 rel_err_log = log10( abs(pD - pK) ./ (abs(pK) + eps0) );
 
-%% -------------------- plots: 1D compare (rho line) --------------------
-figure('Name',sprintf('King vs DIM-%s (z≈1 m)', upper(string(res.calc.dim.method))), ...
+%% -------------------- plots: 1D compare --------------------
+figure('Name',sprintf('King vs DIM-%s (%s)', upper(string(res.calc.dim.method)), upper(compare_mode)), ...
     'position',[100 100 1200 1200]);
 
 subplot(4,1,1);
-plot(rho_ds, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
-plot(rho_ds, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
+plot(coord_vec, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
+plot(coord_vec, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)'); ylabel('SPL (dB)');
-title(sprintf('Magnitude @ z = %.2f m', z_use));
+xlabel(coord_label); ylabel('SPL (dB)');
+title(sprintf('SPL @ %s', coord_title));
 legend('King','DIM');
 
 subplot(4,1,2);
-plot(rho_ds, magK, 'LineWidth',1.5); hold on;
-plot(rho_ds, magD, '--', 'LineWidth',1.5);
+plot(coord_vec, magK, 'LineWidth',1.5); hold on;
+plot(coord_vec, magD, '--', 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)'); ylabel('|p| (Pa)');
-title(sprintf('Magnitude @ z = %.2f m', z_use));
+xlabel(coord_label); ylabel('|p| (Pa)');
+title(sprintf('Magnitude @ %s', coord_title));
 legend('King','DIM');
 
 subplot(4,1,3);
-plot(rho_ds, phK, 'LineWidth',1.5); hold on;
-plot(rho_ds, phD, '--', 'LineWidth',1.5);
+plot(coord_vec, phK, 'LineWidth',1.5); hold on;
+plot(coord_vec, phD, '--', 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)'); ylabel('Phase (rad)');
-title('Phase');
+xlabel(coord_label); ylabel('Phase (rad)');
+title(sprintf('Phase @ %s', coord_title));
 legend('King','DIM');
 
 subplot(4,1,4);
-plot(rho_ds, rel_err_log, 'LineWidth',1.5);
+plot(coord_vec, rel_err_log, 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)');
+xlabel(coord_label);
 ylabel('log_{10} relative error');
 title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
 
-local_save_fig_png(gcf, sprintf('King_vs_DIM_1D_z%.2fm', z_use));
+local_save_fig_png(gcf, sprintf('King_vs_DIM_1D_%s__%s', coord_name, lower(compare_mode)));
 
 fprintf('\n==================== SUMMARY ====================\n');
+fprintf('compare_mode = %s\n', compare_mode);
 fprintf('dim_method = %s\n', string(res.calc.dim.method));
-fprintf('z_target = %.1f m, z_use = %.2f m (explicitly passed to obs_grid.dim.z)\n', z_target, z_use);
+if strcmpi(compare_mode,'radial')
+    fprintf('z_target = %.1f m, z_use = %.2f m (explicitly passed to obs_grid.dim.z)\n', z_target, z_use);
+else
+    fprintf('axial comparison at rho = xh(1) = %.6g m\n', rho_full(1));
+end
 fprintf('Total (both) time: %.3f s\n', tAll);
 fprintf('NOTE: memory readings may be NaN if OS API is unavailable.\n');
 
@@ -227,9 +294,9 @@ fprintf('NOTE: memory readings may be NaN if OS API is unavailable.\n');
 % ============================================================
 
 % choose which frequency field to plot
-p_rz = res.king.p_f1;     % Nr x Nz
-z_ultra = res.king.z(:).';% 1 x Nz
-r_ultra = res.king.rho(:);% Nr x 1
+p_rz = res.king.p_f1;      % Nr x Nz
+z_ultra = res.king.z(:).'; % 1 x Nz
+r_ultra = res.king.rho(:); % Nr x 1
 
 rho_max = calc.fht.rho_max;
 idx_r = find(r_ultra <= rho_max, 1, 'last');
@@ -287,190 +354,191 @@ local_save_fig_png(gcf, 'FHT_xOz_SPL');
 
 %% ============================================================
 % 2D FIG #2: xOy @ z≈1 m (FHT vs DIM) — SAME colorbar per figure
-% - Construct polar grid (rho,theta) and do phase extension:
-%   p2D(r,theta) = p_line(r) * exp(1j*m*theta)
+% - only meaningful for radial mode
 % ============================================================
+if strcmpi(compare_mode,'radial')
 
-% ---- view settings ----
-r_boundary = 0.30; % radius to show (m)
-theta_fig = 0:0.01:2*pi;
+    % ---- view settings ----
+    r_boundary = 0.30; % radius to show (m)
+    theta_fig = 0:0.01:2*pi;
 
-% ---- m ----
-if isfield(res,'source') && isfield(res.source,'m_used')
-    m_use = res.source.m_used;
-else
-    m_use = source.m;
+    % ---- m ----
+    if isfield(res,'source') && isfield(res.source,'m_used')
+        m_use = res.source.m_used;
+    else
+        m_use = source.m;
+    end
+
+    % ---- radial samples (NO interp) ----
+    rho_fig = rho_ds(:).';          % 1 x Nr_fig
+    pK_line = pK(:).';              % 1 x Nr_fig
+    pD_line = pD(:).';              % 1 x Nr_fig
+
+    % crop to r_boundary
+    idx_rb = find(rho_fig <= r_boundary, 1, 'last');
+    if isempty(idx_rb); idx_rb = 1; end
+    rho_fig = rho_fig(1:idx_rb);
+    pK_line = pK_line(1:idx_rb);
+    pD_line = pD_line(1:idx_rb);
+
+    % polar grid -> Cartesian
+    [TH, R] = meshgrid(theta_fig, rho_fig);
+    [X, Y] = pol2cart(TH, R);
+
+    % phase extension
+    pK_2D = (pK_line(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
+    pD_2D = (pD_line(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
+
+    % fields
+    AMP_K = abs(pK_2D);
+    AMP_D = abs(pD_2D);
+
+    SPL_K = 20*log10(AMP_K / medium.pref / sqrt(2)); % RMS SPL
+    SPL_D = 20*log10(AMP_D / medium.pref / sqrt(2));
+
+    PH_K = angle(pK_2D)/pi;
+    PH_D = angle(pD_2D)/pi;
+
+    % ---- unified color limits ----
+    spl_lim = [min([SPL_K(:); SPL_D(:)]), max([SPL_K(:); SPL_D(:)])];
+    amp_lim = [min([AMP_K(:); AMP_D(:)]), max([AMP_K(:); AMP_D(:)])];
+    ph_lim  = [-1 1];
+
+    %% ---- FIG: xOy SPL (two subplots, SAME colorbar range) ----
+    figure('Name',sprintf('xOy SPL @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
+        'position',[100 100 1400 650]);
+
+    subplot(1,2,1);
+    pcolor(X, Y, SPL_K); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap(MyColor('vik'))
+    clim(spl_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$\mathrm{SPL}$ (dB re $p_{\mathrm{ref}}$, RMS)';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.07 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title('FHT (from King)','Interpreter','latex','Fontsize',20);
+
+    subplot(1,2,2);
+    pcolor(X, Y, SPL_D); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap(MyColor('vik'))
+    clim(spl_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$\mathrm{SPL}$ (dB re $p_{\mathrm{ref}}$, RMS)';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.55 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+
+    sgtitle(sprintf('$xOy$ SPL @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
+        'Interpreter','latex','Fontsize',20);
+
+    local_save_fig_png(gcf, sprintf('xOy_SPL_z%.2fm_m%d', z_use, m_use));
+
+    %% ---- FIG: xOy AMP (|p|) (two subplots, SAME colorbar range) ----
+    figure('Name',sprintf('xOy AMP @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
+        'position',[100 100 1400 650]);
+
+    subplot(1,2,1);
+    pcolor(X, Y, AMP_K); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap(MyColor('vik'))
+    clim(amp_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$|p|$ (Pa)';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.07 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title('FHT (from King)','Interpreter','latex','Fontsize',20);
+
+    subplot(1,2,2);
+    pcolor(X, Y, AMP_D); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap(MyColor('vik'))
+    clim(amp_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$|p|$ (Pa)';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.55 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+
+    sgtitle(sprintf('$xOy$ AMP ($|p|$) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
+        'Interpreter','latex','Fontsize',20);
+
+    local_save_fig_png(gcf, sprintf('xOy_AMP_z%.2fm_m%d', z_use, m_use));
+
+    %% ---- FIG: xOy Phase/pi (two subplots, SAME colorbar range) ----
+    figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
+        'position',[100 100 1400 650]);
+
+    subplot(1,2,1);
+    pcolor(X, Y, PH_K); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap('hsv')
+    clim(ph_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$\angle p/\pi$';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.07 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title('FHT (from King)','Interpreter','latex','Fontsize',20);
+
+    subplot(1,2,2);
+    pcolor(X, Y, PH_D); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap('hsv')
+    clim(ph_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$\angle p/\pi$';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.55 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+
+    sgtitle(sprintf('$xOy$ Phase$/\\pi$ @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
+        'Interpreter','latex','Fontsize',20);
+
+    local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d', z_use, m_use));
 end
-
-% ---- radial samples (NO interp) ----
-rho_fig = rho_ds(:).';          % 1 x Nr_fig
-pK_line = pK(:).';              % 1 x Nr_fig
-pD_line = pD(:).';              % 1 x Nr_fig
-
-% crop to r_boundary
-idx_rb = find(rho_fig <= r_boundary, 1, 'last');
-if isempty(idx_rb); idx_rb = 1; end
-rho_fig = rho_fig(1:idx_rb);
-pK_line = pK_line(1:idx_rb);
-pD_line = pD_line(1:idx_rb);
-
-% polar grid -> Cartesian
-[TH, R] = meshgrid(theta_fig, rho_fig);
-[X, Y] = pol2cart(TH, R);
-
-% phase extension
-pK_2D = (pK_line(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
-pD_2D = (pD_line(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
-
-% fields
-AMP_K = abs(pK_2D);
-AMP_D = abs(pD_2D);
-
-SPL_K = 20*log10(AMP_K / medium.pref / sqrt(2)); % RMS SPL
-SPL_D = 20*log10(AMP_D / medium.pref / sqrt(2));
-
-PH_K = angle(pK_2D)/pi;
-PH_D = angle(pD_2D)/pi;
-
-% ---- unified color limits ----
-spl_lim = [min([SPL_K(:); SPL_D(:)]), max([SPL_K(:); SPL_D(:)])];
-amp_lim = [min([AMP_K(:); AMP_D(:)]), max([AMP_K(:); AMP_D(:)])];
-ph_lim  = [-1 1];
-
-%% ---- FIG: xOy SPL (two subplots, SAME colorbar range) ----
-figure('Name',sprintf('xOy SPL @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
-    'position',[100 100 1400 650]);
-
-subplot(1,2,1);
-pcolor(X, Y, SPL_K); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap(MyColor('vik'))
-clim(spl_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$\mathrm{SPL}$ (dB re $p_{\mathrm{ref}}$, RMS)';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.07 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title('FHT (from King)','Interpreter','latex','Fontsize',20);
-
-subplot(1,2,2);
-pcolor(X, Y, SPL_D); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap(MyColor('vik'))
-clim(spl_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$\mathrm{SPL}$ (dB re $p_{\mathrm{ref}}$, RMS)';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.55 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
-
-sgtitle(sprintf('$xOy$ SPL @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
-    'Interpreter','latex','Fontsize',20);
-
-local_save_fig_png(gcf, sprintf('xOy_SPL_z%.2fm_m%d', z_use, m_use));
-
-%% ---- FIG: xOy AMP (|p|) (two subplots, SAME colorbar range) ----
-figure('Name',sprintf('xOy AMP @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
-    'position',[100 100 1400 650]);
-
-subplot(1,2,1);
-pcolor(X, Y, AMP_K); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap(MyColor('vik'))
-clim(amp_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$|p|$ (Pa)';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.07 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title('FHT (from King)','Interpreter','latex','Fontsize',20);
-
-subplot(1,2,2);
-pcolor(X, Y, AMP_D); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap(MyColor('vik'))
-clim(amp_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$|p|$ (Pa)';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.55 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
-
-sgtitle(sprintf('$xOy$ AMP ($|p|$) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
-    'Interpreter','latex','Fontsize',20);
-
-local_save_fig_png(gcf, sprintf('xOy_AMP_z%.2fm_m%d', z_use, m_use));
-
-%% ---- FIG: xOy Phase/pi (two subplots, SAME colorbar range) ----
-figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT vs DIM)', z_use, m_use), ...
-    'position',[100 100 1400 650]);
-
-subplot(1,2,1);
-pcolor(X, Y, PH_K); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap('hsv')
-clim(ph_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$\angle p/\pi$';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.07 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title('FHT (from King)','Interpreter','latex','Fontsize',20);
-
-subplot(1,2,2);
-pcolor(X, Y, PH_D); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap('hsv')
-clim(ph_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$\angle p/\pi$';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.55 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
-
-sgtitle(sprintf('$xOy$ Phase$/\\pi$ @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', z_use, m_use, r_boundary), ...
-    'Interpreter','latex','Fontsize',20);
-
-local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d', z_use, m_use));
 
 %% -------------------- radial spectral check --------------------
 xH = res.fht.xH;
@@ -508,29 +576,29 @@ thr = 1e-3;
 
 % ---------- union mask (King OR DIM below threshold) ----------
 maskU = (magK_n < thr) | (magD_n < thr);
-segU  = local_mask_to_segments(rho_ds, maskU);
+segU  = local_mask_to_segments(coord_vec, maskU);
 
 % ---------- plot ----------
-fig2 = figure('Name',sprintf('King vs DIM-%s (z≈1 m) [NORM]', ...
-    upper(string(res.calc.dim.method))), ...
+fig2 = figure('Name',sprintf('King vs DIM-%s (%s) [NORM]', ...
+    upper(string(res.calc.dim.method)), upper(compare_mode)), ...
     'position',[150 120 1200 1200]);
 
 % ==================== (1) SPL ====================
 subplot(4,1,1);
-plot(rho_ds, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
-plot(rho_ds, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
+plot(coord_vec, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
+plot(coord_vec, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)'); ylabel('SPL (dB)');
-title(sprintf('Magnitude @ z = %.2f m', z_use));
+xlabel(coord_label); ylabel('SPL (dB)');
+title(sprintf('SPL @ %s', coord_title));
 legend('King','DIM','Location','best');
 
 % ==================== (2) normalized magnitude ====================
 subplot(4,1,2);
-plot(rho_ds, magK_n, 'LineWidth',1.5); hold on;
-plot(rho_ds, magD_n, '--', 'LineWidth',1.5);
+plot(coord_vec, magK_n, 'LineWidth',1.5); hold on;
+plot(coord_vec, magD_n, '--', 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)'); ylabel('|p| / max(|p|)');
-title(sprintf('Normalized magnitude (thr = %.0e)', thr));
+xlabel(coord_label); ylabel('|p| / max(|p|)');
+title(sprintf('Normalized magnitude @ %s (thr = %.0e)', coord_title, thr));
 
 yl = ylim;
 hPatch = local_mark_segments_strong(segU, yl);
@@ -545,11 +613,11 @@ legend([ ...
 
 % ==================== (3) phase ====================
 subplot(4,1,3);
-plot(rho_ds, phK, 'LineWidth',1.5); hold on;
-plot(rho_ds, phD, '--', 'LineWidth',1.5);
+plot(coord_vec, phK, 'LineWidth',1.5); hold on;
+plot(coord_vec, phD, '--', 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)'); ylabel('Phase (rad)');
-title('Phase');
+xlabel(coord_label); ylabel('Phase (rad)');
+title(sprintf('Phase @ %s', coord_title));
 
 yl = ylim;
 local_mark_segments_strong(segU, yl);
@@ -560,9 +628,9 @@ legend('King','DIM','Location','best');
 % ==================== (4) relative error ====================
 subplot(4,1,4);
 rel_err_log = log10( abs(pD - pK) ./ (abs(pK) + eps0) );
-plot(rho_ds, rel_err_log, 'LineWidth',1.5);
+plot(coord_vec, rel_err_log, 'LineWidth',1.5);
 grid on;
-xlabel('\rho (m)');
+xlabel(coord_label);
 ylabel('log_{10} relative error');
 title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
 
@@ -573,15 +641,12 @@ ylim(yl);
 legend('Error','|p|/max < 1e-3','Location','best');
 
 % ---------- save with suffix ----------
-local_save_fig_png(fig2, sprintf('King_vs_DIM_1D_z%.2fm__norm', z_use));
+local_save_fig_png(fig2, sprintf('King_vs_DIM_1D_%s__%s__norm', coord_name, lower(compare_mode)));
 
 %% ============================================================
 % EXTRA FIGS (PHASE-FIX for FHT only; DIM unchanged)
 % 1) 1D compare (4 subplots): ONLY subplot(3) uses FHT phase-extrapolated
-% 2) 2D phase compare (2 subplots): FHT uses phase-extrapolated radial line,
-%    DIM uses RAW radial line
-%
-% NOTE: visualization only (m large -> near-axis low-|p| phase unreliable)
+% 2) 2D phase compare (2 subplots): only for radial mode
 % ============================================================
 
 thr_phase = thr;
@@ -593,7 +658,7 @@ pK_raw = pK(:);
 pD_raw = pD(:);
 
 % ONLY fix FHT phase
-pK_fix = local_phase_extrapolate_low_amp(pK_raw, rho_ds(:), thr_phase, thr_u);
+pK_fix = local_phase_extrapolate_low_amp(pK_raw, coord_vec(:), thr_phase, thr_u);
 
 magK = abs(pK_raw);
 magD = abs(pD_raw);
@@ -602,113 +667,128 @@ if fig.unwrap
     phK_fix = unwrap(angle(pK_fix));
     phD_raw = unwrap(angle(pD_raw));
 else
-    phK_fix = (angle(pK_fix));
-    phD_raw = (angle(pD_raw));
+    phK_fix = angle(pK_fix);
+    phD_raw = angle(pD_raw);
 end
 
 rel_err_log = log10( abs(pD_raw - pK_raw) ./ (abs(pK_raw) + eps0) );
 
-fig1_fix = figure('Name',sprintf('King vs DIM-%s (z≈1 m) [FHT-PHASE-EXTRAP]', ...
-    upper(string(res.calc.dim.method))), 'position',[120 120 1200 1200]);
+fig1_fix = figure('Name',sprintf('King vs DIM-%s (%s) [FHT-PHASE-EXTRAP]', ...
+    upper(string(res.calc.dim.method)), upper(compare_mode)), ...
+    'position',[120 120 1200 1200]);
 
 subplot(4,1,1);
-plot(rho_ds, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
-plot(rho_ds, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
-grid on; xlabel('\rho (m)'); ylabel('SPL (dB)');
-title(sprintf('Magnitude @ z = %.2f m', z_use));
+plot(coord_vec, 20*log10(magK / medium.pref / sqrt(2)), 'LineWidth',1.5); hold on;
+plot(coord_vec, 20*log10(magD / medium.pref / sqrt(2)), '--', 'LineWidth',1.5);
+grid on; xlabel(coord_label); ylabel('SPL (dB)');
+title(sprintf('SPL @ %s', coord_title));
 legend('King','DIM','Location','best');
 
 subplot(4,1,2);
-plot(rho_ds, magK, 'LineWidth',1.5); hold on;
-plot(rho_ds, magD, '--', 'LineWidth',1.5);
-grid on; xlabel('\rho (m)'); ylabel('|p| (Pa)');
-title(sprintf('Magnitude @ z = %.2f m', z_use));
+plot(coord_vec, magK, 'LineWidth',1.5); hold on;
+plot(coord_vec, magD, '--', 'LineWidth',1.5);
+grid on; xlabel(coord_label); ylabel('|p| (Pa)');
+title(sprintf('Magnitude @ %s', coord_title));
 legend('King','DIM','Location','best');
 
 subplot(4,1,3);
-plot(rho_ds, phK_fix, 'LineWidth',1.5); hold on;
-plot(rho_ds, phD_raw, '--', 'LineWidth',1.5);
-grid on; xlabel('\rho (m)'); ylabel('Phase (rad)');
+plot(coord_vec, phK_fix, 'LineWidth',1.5); hold on;
+plot(coord_vec, phD_raw, '--', 'LineWidth',1.5);
+grid on; xlabel(coord_label); ylabel('Phase (rad)');
 title(sprintf('Phase: ONLY King extrapolated for |p|/max<%.0e (viz only)', thr_phase));
 legend('King (phase-fixed)','DIM','Location','best');
 
 subplot(4,1,4);
-plot(rho_ds, rel_err_log, 'LineWidth',1.5);
-grid on; xlabel('\rho (m)'); ylabel('log_{10} relative error');
+plot(coord_vec, rel_err_log, 'LineWidth',1.5);
+grid on; xlabel(coord_label); ylabel('log_{10} relative error');
 title('log_{10}(|p_{DIM}-p_{King}| / |p_{King}|)');
 
-local_save_fig_png(fig1_fix, sprintf('King_vs_DIM_1D_z%.2fm__FHTphaseExtrap', z_use));
+local_save_fig_png(fig1_fix, sprintf('King_vs_DIM_1D_%s__%s__FHTphaseExtrap', coord_name, lower(compare_mode)));
 
 %% -------------------- (B) 2D: phase/pi compare (FHT fixed vs DIM raw) --------------------
-rho_fig = rho_ds(:).';
-pK_line_raw = pK_raw(:).';
-pD_line_raw = pD_raw(:).';
+% only meaningful for radial mode
+if strcmpi(compare_mode,'radial')
 
-idx_rb = find(rho_fig <= r_boundary, 1, 'last');
-if isempty(idx_rb); idx_rb = numel(rho_fig); end
-rho_fig     = rho_fig(1:idx_rb);
-pK_line_raw = pK_line_raw(1:idx_rb);
-pD_line_raw = pD_line_raw(1:idx_rb);
+    % ---- view settings ----
+    r_boundary = 0.30;
+    theta_fig = 0:0.01:2*pi;
 
-% ONLY fix FHT radial line
-pK_line_fix = local_phase_extrapolate_low_amp(pK_line_raw, rho_fig, thr_phase, thr_u);
+    if isfield(res,'source') && isfield(res.source,'m_used')
+        m_use = res.source.m_used;
+    else
+        m_use = source.m;
+    end
 
-% Polar grid -> Cartesian
-[TH, R] = meshgrid(theta_fig, rho_fig);
-[X, Y]  = pol2cart(TH, R);
+    rho_fig = rho_ds(:).';
+    pK_line_raw = pK_raw(:).';
+    pD_line_raw = pD_raw(:).';
 
-% Phase extension for vortex-m
-pK_2D_fix = (pK_line_fix(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
-pD_2D_raw = (pD_line_raw(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
+    idx_rb = find(rho_fig <= r_boundary, 1, 'last');
+    if isempty(idx_rb); idx_rb = numel(rho_fig); end
+    rho_fig     = rho_fig(1:idx_rb);
+    pK_line_raw = pK_line_raw(1:idx_rb);
+    pD_line_raw = pD_line_raw(1:idx_rb);
 
-PH_K = angle(pK_2D_fix)/pi;
-PH_D = angle(pD_2D_raw)/pi;
+    % ONLY fix FHT radial line
+    pK_line_fix = local_phase_extrapolate_low_amp(pK_line_raw, rho_fig, thr_phase, thr_u);
 
-figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT fixed vs DIM)', z_use, m_use), ...
-    'position',[100 100 1400 650]);
+    % Polar grid -> Cartesian
+    [TH, R] = meshgrid(theta_fig, rho_fig);
+    [X, Y]  = pol2cart(TH, R);
 
-ph_lim = [-1 1];
+    % Phase extension for vortex-m
+    pK_2D_fix = (pK_line_fix(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
+    pD_2D_raw = (pD_line_raw(:) * ones(1, numel(theta_fig))) .* exp(1i*m_use*TH);
 
-subplot(1,2,1);
-pcolor(X, Y, PH_K); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap('hsv')
-clim(ph_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$\angle p/\pi$';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.07 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title(sprintf('FHT (phase-fixed, thr=%.0e)', thr_phase), 'Interpreter','latex','Fontsize',20);
+    PH_K = angle(pK_2D_fix)/pi;
+    PH_D = angle(pD_2D_raw)/pi;
 
-subplot(1,2,2);
-pcolor(X, Y, PH_D); shading flat
-xlim([-1.2*r_boundary 1.2*r_boundary]);
-ylim([-1.2*r_boundary 1.2*r_boundary]);
-pbaspect([1 1 1])
-colormap('hsv')
-clim(ph_lim);
-clb = colorbar;
-clb.Title.Interpreter = 'latex';
-clb.Title.String = '$\angle p/\pi$';
-set(clb,'Fontsize',18);
-set(gca,'position',[0.55 0.12 0.38 0.78]);
-set(gca,'linewidth',2);
-set(gca,'TickLabelInterpreter','latex');
-xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
-ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
-title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+    figure('Name',sprintf('xOy Phase/pi @ z=%.2f m, m=%d (FHT fixed vs DIM)', z_use, m_use), ...
+        'position',[100 100 1400 650]);
 
-sgtitle(sprintf('$xOy$ Phase$/\\pi$ (FHT phase extrapolated only) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', ...
-    z_use, m_use, r_boundary), 'Interpreter','latex','Fontsize',20);
+    ph_lim = [-1 1];
 
-local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d__FHTphaseExtrap', z_use, m_use));
+    subplot(1,2,1);
+    pcolor(X, Y, PH_K); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap('hsv')
+    clim(ph_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$\angle p/\pi$';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.07 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title(sprintf('FHT (phase-fixed, thr=%.0e)', thr_phase), 'Interpreter','latex','Fontsize',20);
+
+    subplot(1,2,2);
+    pcolor(X, Y, PH_D); shading flat
+    xlim([-1.2*r_boundary 1.2*r_boundary]);
+    ylim([-1.2*r_boundary 1.2*r_boundary]);
+    pbaspect([1 1 1])
+    colormap('hsv')
+    clim(ph_lim);
+    clb = colorbar;
+    clb.Title.Interpreter = 'latex';
+    clb.Title.String = '$\angle p/\pi$';
+    set(clb,'Fontsize',18);
+    set(gca,'position',[0.55 0.12 0.38 0.78]);
+    set(gca,'linewidth',2);
+    set(gca,'TickLabelInterpreter','latex');
+    xlabel('$x$ (m)','Interpreter','latex','Fontsize',18);
+    ylabel('$y$ (m)','Interpreter','latex','Fontsize',18);
+    title(sprintf('DIM-%s', upper(string(res.calc.dim.method))), 'Interpreter','latex','Fontsize',20);
+
+    sgtitle(sprintf('$xOy$ Phase$/\\pi$ (FHT phase extrapolated only) @ $z=%.2f$ m, $m=%d$, $r\\le%.2f$ m', ...
+        z_use, m_use, r_boundary), 'Interpreter','latex','Fontsize',20);
+
+    local_save_fig_png(gcf, sprintf('xOy_Phase_z%.2fm_m%d__FHTphaseExtrap', z_use, m_use));
+end
 
 %% ==================== local functions ====================
 function mem_mb = local_get_mem_mb()
@@ -771,7 +851,7 @@ for k = 1:numel(bad)
 end
 end
 
-function local_write_runinfo_txt(save_dir, medium, source, calc, fig)
+function local_write_runinfo_txt(save_dir, medium, source, calc, fig, compare_mode)
 fp = fullfile(save_dir, 'run_info.txt');
 fid = fopen(fp, 'w');
 if fid < 0
@@ -784,6 +864,7 @@ written = struct();
 
 fprintf(fid, '===== RUN INFO =====\n');
 fprintf(fid, 'Time: %s\n\n', datestr(datetime('now'), 'yyyy-mm-dd HH:MM:SS'));
+fprintf(fid, 'compare_mode = %s\n\n', compare_mode);
 
 fprintf(fid, '===== PRIMARY PARAMETERS (USER SPECIFIED) =====\n\n');
 
